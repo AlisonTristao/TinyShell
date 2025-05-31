@@ -77,10 +77,6 @@ class class_function : public base_function {
 
 // class to save the pointers
 class function_manager {
-    // limit to functions pointers
-    unique_ptr<base_function>* func_array;
-    size_t size;
-
     public:
         function_manager(size_t s) : size(s) {
             func_array = new unique_ptr<base_function>[size];
@@ -124,6 +120,9 @@ class function_manager {
         bool check_index(uint8_t index) {
             return (index < 0 || index > size);
         }
+        // limit to functions pointers
+        unique_ptr<base_function>* func_array;
+        size_t size;
 };
 
 // **********************************
