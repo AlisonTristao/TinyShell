@@ -10,7 +10,7 @@
 using namespace std;
 
 // ****************************************
-// * templates to converte typeid to char *
+// * Templates to converte typeid to char *
 // ****************************************
 
 template<typename T>
@@ -24,7 +24,7 @@ constexpr char char_type() {
 }
 
 // *************************************
-// * class to create generic functions *
+// * Class to create generic functions *
 // *************************************
 
 // abstract class to create the generics
@@ -34,45 +34,60 @@ class base_function {
             delete[] param_types;
         }
         virtual uint8_t call(void** args) = 0;
-        virtual const char* get_param_types() const = 0;
-        virtual size_t get_size() const = 0;
+        const char* get_param_types() { return param_types; };
+        size_t get_size() { return size; }
+        String get_name() { return name; }
+        String get_description() { return description; }
     protected:
         char* param_types;
+        String name;
+        String description;
         size_t size;
 };
 
 // template class to save functions with variable parameters
 template<typename... param>
 class class_function : public base_function {
-    public:
-        class_function(function<uint8_t(param...)> f) : func(f) {
-            size = sizeof...(param);
-            param_types = new char[size];
-            
-            // convert tipe_id to char - gnu++ 17
-            size_t i = 0;
-            using expander = int[];
-            (void)expander{0, ((param_types[i++] = char_type<param>()), 0)...};
-        }
+public:
+    class_function(function<uint8_t(param...)> f, String n, String d) : func(f) {
+        size = sizeof...(param);
+        param_types = new char[size];
+        name = n;
+        description = d;
 
-        uint8_t call(void** args) override {
-            return callImpl(args, index_sequence_for<param...>{});
-        }
+        // Convert each parameter type to a single identifying character
+        size_t i = 0;
+        using expander = int[];
+        (void)expander{0, ((param_types[i++] = char_type<param>()), 0)...};
+    }
 
-        const char* get_param_types() const override {
-            return param_types;
-        }
+    // This function is called to invoke the stored function
+    uint8_t call(void** args) override {
+        return callDispatch(args, index_sequence_for<param...>{});
+    }
 
-        size_t get_size() const override {
-            return size;
-        }
+private:
+    // Specialization for functions with NO parameters
+    uint8_t callDispatch(void**, index_sequence<>) {
+        return func();  // Safe: function expects no arguments
+    }
 
-    private:
-        template<size_t... Is>
-        uint8_t callImpl(void** args, index_sequence<Is...>) {
-            return func(*reinterpret_cast<typename remove_reference<param>::type*>(args[Is])...);
-        }
-        function<uint8_t(param...)> func;
+    // General case for functions with one or more parameters
+    template<size_t... Is>
+    uint8_t callDispatch(void** args, index_sequence<Is...>) {
+        return func(this->template getArg<typename remove_reference<param>::type>(args[Is])...);
+    }
+
+    // Converts void* to the expected argument type
+    // Returns default value if ptr is nullptr
+    template<typename T>
+    T getArg(void* ptr) {
+        if (ptr == nullptr)
+            return T{};  // Default-initialized value (e.g., 0, "", false)
+        return *reinterpret_cast<T*>(ptr);
+    }
+
+    function<uint8_t(param...)> func;
 };
 
 // class to save the pointers
@@ -82,47 +97,84 @@ class function_manager {
             func_array = new unique_ptr<base_function>[size];
         }
 
+        ~function_manager(){
+            delete[] func_array;
+        }
+
         template<typename... param>
-        uint8_t add(uint8_t idx, uint8_t(*f)(param...)) {
+        uint8_t add(uint8_t idx, uint8_t(*f)(param...), String name, String description) {
             // check vector limit
             if (check_index(idx)) return 255;
 
             // add into vector
-            func_array[idx] = make_unique<class_function<param...>>(function<uint8_t(param...)>(f));
+            func_array[idx] = make_unique<class_function<param...>>(function<uint8_t(param...)>(f), name, description);
             return 0;
-        }
-
-        uint8_t call(int idx, void** args) {
-            // check the intem index
-            if (check_index(idx)) return 255;
-
-            // call the function and return the result
-            return func_array[idx]->call(args);
         }
 
         const char* get_param_types(uint8_t idx) const {
             return func_array[idx]->get_param_types();
         }
 
-        size_t get_param_sizes(uint8_t idx) const {
+        size_t get_param_size(uint8_t idx) const {
             return func_array[idx]->get_size();
+        }
+
+        String get_name(uint8_t idx) {
+            return func_array[idx]->get_name();
+        }
+
+        String get_description(uint8_t idx) {
+            return func_array[idx]->get_description();
         }
 
         String get_expected_types_string(uint8_t idx){
             String text = "";
             const char* type_parameters = get_param_types(idx);
-            for(uint8_t i; i < get_param_sizes(0); i++)
+            for(uint8_t i; i < get_param_size(idx); i++)
                 text += type_parameters[i];
             return text;
         }
 
+        uint8_t call(int idx) {
+            // call the function and return the result
+            return call(idx, nullptr);
+        }
+
+        uint8_t call(String name) {
+            return call(select(name));
+        }
+
+        uint8_t call(String name, void** args) {
+            return call(select(name), args);
+        }
+
+        uint8_t select(String name) {
+            for (uint8_t i = 0; i < size; i++)
+            if (func_array[i]->get_name() == name)
+                return i;
+            return -1;
+        }
     private:
         bool check_index(uint8_t index) {
-            return (index < 0 || index > size);
+            return (index < 0 || index >= size);
         }
         // limit to functions pointers
         unique_ptr<base_function>* func_array;
         size_t size;
+
+        uint8_t call(int idx, void** args) {
+            // check the intem index
+            if (check_index(idx)) return 255;
+
+            // call the function and return the result
+            try {
+                return func_array[idx]->call(args);
+            } catch (const std::exception& e) {
+                return 202;
+            } catch (...) {
+                return 203;
+            }
+        }
 };
 
 // **********************************
