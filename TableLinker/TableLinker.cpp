@@ -31,7 +31,7 @@ const char* function_manager::get_param_types(size_t idx) {
 }
 
 size_t function_manager::get_param_size(size_t idx) {
-    if (check_index(idx)) return 0;
+    if (check_index(idx)) return FUNCTION_NOT_FOUND;
     return func_array[idx]->get_size();
 }
 
@@ -77,15 +77,15 @@ bool function_manager::check_name(string name) {
 
 uint8_t function_manager::call(size_t idx, void** args) {
     // check the item index
-    if (check_index(idx)) return 255;
+    if (check_index(idx)) return FUNCTION_NOT_FOUND;
 
     // call the function and return the result
     try {
         return func_array[idx]->call(args);
     } catch (const std::exception& e) {
-        return 202;
+        return EXCEPTION;
     } catch (...) {
-        return 203;
+        return UNKNOWN_EXCEPTION;
     }
 }
 
@@ -95,13 +95,13 @@ uint8_t function_manager::call(size_t idx) {
 
 uint8_t function_manager::call(string name, void** args) {
     size_t idx = select(name);
-    if (check_index(idx)) return 255;
+    if (check_index(idx)) return MODULE_NOT_FOUND;
     return call(idx, args);
 }
 
 uint8_t function_manager::call(string name) {
     size_t idx = select(name);
-    if (check_index(idx)) return 255;
+    if (check_index(idx)) return FUNCTION_NOT_FOUND;
     return call(idx);
 }
 
@@ -158,7 +158,7 @@ void TableLinker::resize(size_t new_size) {
 
 uint8_t TableLinker::create_module(string mod_name, string mod_description) {
     // Check if the module already exists
-    if (check_module_name(mod_name)) return 255; // Module already exists
+    if (check_module_name(mod_name)) return MODULE_NOT_FOUND; // Module already exists
     // Find the next available index
     return create_module(size, mod_name, mod_description);
 }
@@ -177,26 +177,25 @@ string TableLinker::get_all() {
 
 uint8_t TableLinker::call(string module_name, string func_name) {
     size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return 255; // Module not found
+    if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
     return commands_array[mod_idx].call(func_name);
 }
 
 uint8_t TableLinker::create_module(size_t idx, string mod_name, string mod_description) {
     // Resize the array if necessary
     if (idx == size) resize(size + 1);
-    
-    if (check_index(idx)) return 255; // Index out of bounds
+
+    if (check_index(idx)) return MODULE_NOT_FOUND; // Index out of bounds
 
     // Set the module name and description
     module_name[idx] = mod_name;
     module_description[idx] = mod_description;
-    return 0;
+    return OK;
 }
 
 uint8_t TableLinker::call(string module_name, string func_name, void** args) {
     size_t mod_idx = select_module(module_name);
-    Serial.println(mod_idx);
-    if (check_index(mod_idx)) return 255; // Module not found
+    if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
     return commands_array[mod_idx].call(func_name, args);
 }
 
@@ -213,14 +212,14 @@ size_t TableLinker::select(string name) {
     for (size_t i = 0; i < size; i++)
         if (commands_array[i].get_name(i) == name)
             return i;
-    return -1;
+    return ERROR;
 }
 
 size_t TableLinker::select_module(string name) {
     for (size_t i = 0; i < size; i++)
         if (module_name[i] == name)
             return i;
-    return -1;
+    return ERROR;
 }
 
 string TableLinker::get_all_module(size_t idx) {

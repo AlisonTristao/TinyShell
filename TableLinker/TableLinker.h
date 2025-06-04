@@ -1,14 +1,20 @@
 #ifndef TABLE_LINKER_H
 #define TABLE_LINKER_H
 
+// errors
+#define OK                  0   // all ok
+#define ERROR               -1  // general error
+#define MODULE_NOT_FOUND    255 // module not found
+#define FUNCTION_NOT_FOUND  254 // function not found
+#define EXCEPTION           202 // try catch exception
+#define UNKNOWN_EXCEPTION   203 // try catch unknown exception
+
 #include <memory>
 #include <functional>
 #include <typeindex>
 #include <typeinfo>
 #include <utility>
 #include <string>
-
-#include <Arduino.h>
 
 using namespace std;
 
@@ -137,11 +143,11 @@ class function_manager {
             if (idx == size) resize(size + 1);
 
             // check vector limit
-            if (check_index(idx)) return -1;
+            if (check_index(idx)) return ERROR;
 
             // add into vector
             func_array[idx] = make_unique<class_function<param...>>(function<uint8_t(param...)>(func), name, description);
-            return 0;
+            return OK;
         }
 
 };
@@ -171,7 +177,7 @@ class TableLinker {
         template<typename... param>
         uint8_t add_func_to_module(string name, uint8_t(*func)(param...), string func_name, string func_description) {
             size_t mod_idx = select_module(name);
-            if (check_index(mod_idx)) return 255; // Module not found
+            if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
             return commands_array[mod_idx].add(func, func_name, func_description);
         }
     private:
