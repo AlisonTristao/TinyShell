@@ -6,6 +6,9 @@
 #include <typeindex>
 #include <typeinfo>
 #include <utility>
+#include <string>
+
+#include <Arduino.h>
 
 using namespace std;
 
@@ -19,7 +22,7 @@ constexpr char char_type() {
     else if constexpr (std::is_same<T, float>::value)   return 'f';
     else if constexpr (std::is_same<T, double>::value)  return 'd';
     else if constexpr (std::is_same<T, char>::value)    return 'c';
-    else if constexpr (std::is_same<T, String>::value)  return 'S';
+    else if constexpr (std::is_same<T, string>::value)  return 's';
     else                                                return '?';  // UNKNOWN
 }
 
@@ -36,12 +39,12 @@ class base_function {
         virtual uint8_t call(void** args) = 0;
         const char* get_param_types() { return param_types; };
         size_t get_size() const { return size; }
-        String get_name() { return name; }
-        String get_description() { return description; }
+        string get_name() { return name; }
+        string get_description() { return description; }
     protected:
         char* param_types;
-        String name;
-        String description;
+        string name;
+        string description;
         size_t size;
 };
 
@@ -49,7 +52,7 @@ class base_function {
 template<typename... param>
 class class_function : public base_function {
     public:
-        class_function(function<uint8_t(param...)> func_ptr, String func_name, String func_description) : func(func_ptr) {
+        class_function(function<uint8_t(param...)> func_ptr, string func_name, string func_description) : func(func_ptr) {
             size = sizeof...(param);
             param_types = new char[size];
             name = func_name;
@@ -93,109 +96,56 @@ class class_function : public base_function {
 // class to save the pointers
 class function_manager {
     public:
-        function_manager() {}
-        function_manager(size_t size) : size(size) {
-            func_array = new unique_ptr<base_function>[size];
-        }
+        function_manager() : func_array(nullptr), size(0) {}
+        function_manager(size_t size);
+        ~function_manager();
 
-        ~function_manager(){
-            delete[] func_array;
-        }
+        // sets
+        void resize(size_t size);
 
-        void set_size(size_t size) {
-            this->size = size;
-            func_array = new unique_ptr<base_function>[size];
-        }
+        // gets
+        const char* get_param_types(size_t idx);
+        size_t get_param_size(size_t idx);
+        string get_name(size_t idx);
+        string get_description(size_t idx);
+        string get_expected_types_string(size_t idx);
+        string get_all();
+
+        // checks
+        bool check_name(string name);
+
+        // calls
+        uint8_t call(string name);
+        uint8_t call(string name, void** args);
 
         template<typename... param>
-        uint8_t add(uint8_t idx, uint8_t(*func)(param...), String name, String description) {
+        uint8_t add(uint8_t(*func)(param...), string name, string description) {
+            return add(size, func, name, description);
+        }
+
+    private:
+        // function pointers
+        unique_ptr<base_function>* func_array;
+        size_t size;
+
+        size_t select(string name);
+        bool check_index(size_t idx);
+        uint8_t call(size_t idx, void** args);
+        uint8_t call(size_t idx);
+
+        template<typename... param>
+        uint8_t add(size_t idx, uint8_t(*func)(param...), string name, string description) {
+            // resize the array if necessary
+            if (idx == size) resize(size + 1);
+
             // check vector limit
-            if (check_index(idx)) return 255;
+            if (check_index(idx)) return -1;
 
             // add into vector
             func_array[idx] = make_unique<class_function<param...>>(function<uint8_t(param...)>(func), name, description);
             return 0;
         }
 
-        const char* get_param_types(uint8_t idx) const {
-            return func_array[idx]->get_param_types();
-        }
-
-        size_t get_param_size(uint8_t idx) const {
-            return func_array[idx]->get_size();
-        }
-
-        String get_name(uint8_t idx) {
-            return func_array[idx]->get_name();
-        }
-
-        String get_description(uint8_t idx) {
-            return func_array[idx]->get_description();
-        }
-
-        String get_expected_types_string(uint8_t idx){
-            String text = "";
-            const char* type_parameters = get_param_types(idx);
-            for(uint8_t i; i < get_param_size(idx); i++)
-                text += type_parameters[i];
-            return text;
-        }
-
-        String get_all() {
-            String text = "";
-            for (uint8_t i = 0; i < size; i++)
-                text += func_array[i]->get_name() + " => " + func_array[i]->get_description() + "\n";
-            return text;
-        }
-
-        uint8_t call(int idx) {
-            // call the function and return the result
-            return call(idx, nullptr);
-        }
-
-        uint8_t call(String name) {
-            return call(select(name));
-        }
-
-        uint8_t call(String name, void** args) {
-            return call(select(name), args);
-        }
-
-        uint8_t select(String name) {
-            for (uint8_t i = 0; i < size; i++)
-            if (func_array[i]->get_name() == name)
-                return i;
-            return -1;
-        }
-
-        bool check_name(String name) {
-            for (uint8_t i = 0; i < size; i++)
-                if (func_array[i]->get_name() == name)
-                    return true;
-            return false;
-        }
-    private:
-        // limit to functions pointers
-        unique_ptr<base_function>* func_array;
-        size_t size;
-
-        bool check_index(uint8_t index) {
-            return (index < 0 || index >= size);
-        }
-
-        uint8_t call(int idx, void** args) {
-            // check the intem index
-            if (check_index(idx)) return 255;
-
-            // call the function and return the result
-            try {
-                return func_array[idx]->call(args);
-            } catch (const std::exception& e) {
-                return 202;
-            } catch (...) {
-                return 203;
-            }
-        }
 };
 
 // **********************************
@@ -204,48 +154,47 @@ class function_manager {
 
 class TableLinker {
     public:
-        TableLinker(size_t size) : size(size) {
-            commands_array = new function_manager[size];
-            module_name = new String[size];
-            module_description = new String[size];
-        }
+        TableLinker() : commands_array(nullptr), module_name(nullptr), module_description(nullptr), size(0) {}
+        TableLinker(size_t table_size);
+        ~TableLinker();
 
-        ~TableLinker() {
-            delete[] commands_array, module_name, module_description;
-        }
+        // sets
+        void resize(size_t new_size);
 
-        uint8_t create_module(uint8_t idx, size_t mod_size, String mod_name, String mod_description) {
-            if (check_index(idx)) return 255;
-            commands_array[idx].set_size(mod_size);
-            module_name[idx] = mod_name;
-            module_description[idx] = mod_description;
-        }
+        // gets
+        string get_all();
+        uint8_t create_module(string mod_name, string mod_description);
+        string get_all_module(string name);
+        
+        // checks
+        bool check_module_name(string name);
+
+        // calls
+        uint8_t call(string module_name, string func_name);
+        uint8_t call(string module_name, string func_name, void** args);
 
         template<typename... param>
-        uint8_t add_func_to_module(size_t mod_idx, uint8_t(*func)(param...), size_t func_idx, String func_name, String func_description) {
-            return commands_array[mod_idx].add(func_idx, func, func_name, func_description);
+        uint8_t add_func_to_module(string name, uint8_t(*func)(param...), string func_name, string func_description) {
+            size_t mod_idx = select_module(name);
+            if (check_index(mod_idx)) return 255; // Module not found
+            return commands_array[mod_idx].add(func, func_name, func_description);
         }
-
-        String get_all() {
-            String text = "";
-            for (uint8_t i = 0; i < size; i++) 
-                text += module_name[i] + " => " + module_description[i] + "\n";
-            return text;
-        }
-
-        String get_all_module(uint8_t idx) {
-            if (check_index(idx)) return "255";
-                return commands_array[idx].get_all();
-        }
-
     private:
-        bool check_index(uint8_t index) {
-            return (index < 0 || index >= size);
-        }
         function_manager* commands_array;
-        String* module_name;
-        String* module_description;
+        string* module_name;
+        string* module_description;
         size_t size;
+    
+        bool check_index(size_t idx);
+        size_t select(string name);
+        size_t select_module(string name);
+        string get_all_module(size_t idx);
+        uint8_t create_module(size_t idx, string mod_name, string mod_description);
+
+        template<typename... param>
+        uint8_t add_func_to_module(size_t mod_idx, uint8_t(*func)(param...), string func_name, string func_description) {
+            return commands_array[mod_idx].add(func, func_name, func_description);
+        }
 };
 
 # endif
