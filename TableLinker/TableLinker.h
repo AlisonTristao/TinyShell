@@ -100,9 +100,6 @@ class function_manager {
         function_manager(size_t size);
         ~function_manager();
 
-        // sets
-        void resize(size_t size);
-
         // gets
         const char* get_param_types(size_t idx);
         size_t get_param_size(size_t idx);
@@ -129,6 +126,7 @@ class function_manager {
         size_t size;
 
         size_t select(string name);
+        void resize(size_t size);
         bool check_index(size_t idx);
         uint8_t call(size_t idx, void** args);
         uint8_t call(size_t idx);
@@ -158,9 +156,6 @@ class TableLinker {
         TableLinker(size_t table_size);
         ~TableLinker();
 
-        // sets
-        void resize(size_t new_size);
-
         // gets
         string get_all();
         uint8_t create_module(string mod_name, string mod_description);
@@ -186,6 +181,7 @@ class TableLinker {
         size_t size;
     
         bool check_index(size_t idx);
+        void resize(size_t new_size);
         size_t select(string name);
         size_t select_module(string name);
         string get_all_module(size_t idx);
