@@ -2,12 +2,12 @@
 #define TABLE_LINKER_H
 
 // errors
-#define OK                  0   // all ok
-#define ERROR               -1  // general error
-#define MODULE_NOT_FOUND    255 // module not found
-#define FUNCTION_NOT_FOUND  254 // function not found
-#define EXCEPTION           202 // try catch exception
-#define UNKNOWN_EXCEPTION   203 // try catch unknown exception
+#define RESULT_OK  0
+#define RESULT_ERROR 255
+#define FUNCTION_NOT_FOUND 254
+#define MODULE_NOT_FOUND 253
+#define EXCEPTION 202
+#define UNKNOWN_EXCEPTION 203
 
 #include <memory>
 #include <functional>
@@ -15,6 +15,7 @@
 #include <typeinfo>
 #include <utility>
 #include <string>
+#include <cstring>
 
 using namespace std;
 
@@ -23,13 +24,26 @@ using namespace std;
 // ****************************************
 
 template<typename T>
-constexpr char char_type() {
-    if      constexpr (std::is_same<T, int>::value)     return 'i';
-    else if constexpr (std::is_same<T, float>::value)   return 'f';
-    else if constexpr (std::is_same<T, double>::value)  return 'd';
-    else if constexpr (std::is_same<T, char>::value)    return 'c';
-    else if constexpr (std::is_same<T, string>::value)  return 's';
-    else                                                return '?';  // UNKNOWN
+constexpr const char* type_code() {
+    if      constexpr (is_same<T, uint8_t>::value)   return "u8";
+    else if constexpr (is_same<T, int8_t>::value)    return "i1";
+    else if constexpr (is_same<T, int32_t>::value)   return "i4";
+    else if constexpr (is_same<T, uint32_t>::value)  return "u4";
+    else if constexpr (is_same<T, float>::value)     return "f4";
+    else if constexpr (is_same<T, double>::value)    return "f8";
+    else if constexpr (is_same<T, char>::value)      return "c1";
+    else if constexpr (is_same<T, string>::value)    return "s0";
+    else                                             return "??";  // Unknown type
+}
+
+inline void* convert_type_char(const char* data, const char* type_code) {
+    if (strcmp(type_code, "u8") == 0) return new uint8_t(static_cast<uint8_t>(atoi(data)));
+    if (strcmp(type_code, "i4") == 0) return new int32_t(atoi(data));
+    if (strcmp(type_code, "f4") == 0) return new float(atof(data));
+    if (strcmp(type_code, "f8") == 0) return new double(atof(data));
+    if (strcmp(type_code, "c1") == 0) return new char(data[0]);
+    if (strcmp(type_code, "s0") == 0) return new std::string(data);
+    throw std::invalid_argument("Unknown type code");
 }
 
 // *************************************
@@ -43,12 +57,12 @@ class base_function {
             delete[] param_types;
         }
         virtual uint8_t call(void** args) = 0;
-        const char* get_param_types() { return param_types; };
+        const char** get_param_types() { return param_types; };
         size_t get_size() const { return size; }
         string get_name() { return name; }
         string get_description() { return description; }
     protected:
-        char* param_types;
+        const char** param_types = nullptr;
         string name;
         string description;
         size_t size;
@@ -60,14 +74,14 @@ class class_function : public base_function {
     public:
         class_function(function<uint8_t(param...)> func_ptr, string func_name, string func_description) : func(func_ptr) {
             size = sizeof...(param);
-            param_types = new char[size];
+            param_types = new const char*[size];
             name = func_name;
             description = func_description;
 
             // Convert each parameter type to a single identifying character
             size_t i = 0;
             using expander = int[];
-            (void)expander{0, ((param_types[i++] = char_type<param>()), 0)...};
+            (void)expander{0, ((param_types[i++] = type_code<param>()), 0)...};
         }
 
         // This function is called to invoke the stored function
@@ -107,19 +121,19 @@ class function_manager {
         ~function_manager();
 
         // gets
-        const char* get_param_types(size_t idx);
+        const char** get_param_types(string name);
         size_t get_param_size(size_t idx);
         string get_name(size_t idx);
         string get_description(size_t idx);
-        string get_expected_types_string(size_t idx);
         string get_all();
+        string get_expected_types_str(string name);
 
         // checks
         bool check_name(string name);
+        bool check_expected_types(string name, size_t receive);
 
         // calls
-        uint8_t call(string name);
-        uint8_t call(string name, void** args);
+        uint8_t call(string name, void** args = nullptr);
 
         template<typename... param>
         uint8_t add(uint8_t(*func)(param...), string name, string description) {
@@ -135,6 +149,8 @@ class function_manager {
         void resize(size_t size);
         bool check_index(size_t idx);
         uint8_t call(size_t idx, void** args);
+        const char** get_param_types(size_t idx);
+        string get_expected_types_str(size_t idx);
         uint8_t call(size_t idx);
 
         template<typename... param>
@@ -143,11 +159,11 @@ class function_manager {
             if (idx == size) resize(size + 1);
 
             // check vector limit
-            if (check_index(idx)) return ERROR;
+            if (check_index(idx)) return RESULT_ERROR;
 
             // add into vector
             func_array[idx] = make_unique<class_function<param...>>(function<uint8_t(param...)>(func), name, description);
-            return OK;
+            return RESULT_OK;
         }
 
 };
@@ -166,9 +182,13 @@ class TableLinker {
         string get_all();
         uint8_t create_module(string mod_name, string mod_description);
         string get_all_module(string name);
-        
+        string get_expected_types_str(string module_name, string func_name);
+
         // checks
         bool check_module_name(string name);
+        bool check_function_name(string module_name, string func_name);
+        bool check_expected_types(string module_name, string func_name, size_t receive);
+        const char** get_param_types(string module_name, string func_name);
 
         // calls
         uint8_t call(string module_name, string func_name);

@@ -25,7 +25,12 @@ void function_manager::resize(size_t new_size) {
     size = new_size;
 }
 
-const char* function_manager::get_param_types(size_t idx) {
+const char** function_manager::get_param_types(string name) {
+    size_t idx = select(name);
+    return get_param_types(idx);
+}
+
+const char** function_manager::get_param_types(size_t idx) {
     if (check_index(idx)) return nullptr;
     return func_array[idx]->get_param_types();
 }
@@ -45,9 +50,15 @@ string function_manager::get_description(size_t idx) {
     return func_array[idx]->get_description();
 }
 
-string function_manager::get_expected_types_string(size_t idx) {
+string function_manager::get_expected_types_str(string name) {
+    size_t idx = select(name);
     if (check_index(idx)) return "";
-    const char* types = func_array[idx]->get_param_types();
+    return get_expected_types_str(idx);
+}
+
+string function_manager::get_expected_types_str(size_t idx) {
+    if (check_index(idx)) return "";
+    const char** types = func_array[idx]->get_param_types();
     size_t size_param = func_array[idx]->get_size();
     string expected_types = "(";
     for (size_t i = 0; i < size_param; i++) {
@@ -62,8 +73,8 @@ string function_manager::get_expected_types_string(size_t idx) {
 string function_manager::get_all() {
     string text = "";
     for (size_t i = 0; i < size; i++)
-        text += "-" + func_array[i]->get_name() + " " + get_expected_types_string(i) + " => " + func_array[i]->get_description() + "\n";
-    return text;
+        text += "-" + func_array[i]->get_name() + " " + get_expected_types_str(i) + " => " + func_array[i]->get_description() + "\n";
+    return text.empty() ? "no functions available.\n" : text;
 }
 
 bool function_manager::check_index(size_t idx) {
@@ -99,17 +110,17 @@ uint8_t function_manager::call(string name, void** args) {
     return call(idx, args);
 }
 
-uint8_t function_manager::call(string name) {
-    size_t idx = select(name);
-    if (check_index(idx)) return FUNCTION_NOT_FOUND;
-    return call(idx);
-}
-
 size_t function_manager::select(string name) {
     for (size_t i = 0; i < size; i++)
         if (func_array[i]->get_name() == name)
             return i;
     return -1;
+}
+
+bool function_manager::check_expected_types(string name, size_t receive) {
+    size_t idx = select(name);
+    if (check_index(idx)) return false; // Function not found
+    return (receive == func_array[idx]->get_size());
 }
 
 TableLinker::TableLinker(size_t table_size) : size(table_size) {
@@ -172,7 +183,7 @@ string TableLinker::get_all() {
     string text = "";
     for (size_t i = 0; i < size; i++)
         text += module_name[i] + " => " + module_description[i] + "\n";
-    return text;
+    return text.empty() ? "no modules available.\n" : text;
 }
 
 uint8_t TableLinker::call(string module_name, string func_name) {
@@ -190,7 +201,7 @@ uint8_t TableLinker::create_module(size_t idx, string mod_name, string mod_descr
     // Set the module name and description
     module_name[idx] = mod_name;
     module_description[idx] = mod_description;
-    return OK;
+    return RESULT_OK;
 }
 
 uint8_t TableLinker::call(string module_name, string func_name, void** args) {
@@ -212,20 +223,44 @@ size_t TableLinker::select(string name) {
     for (size_t i = 0; i < size; i++)
         if (commands_array[i].get_name(i) == name)
             return i;
-    return ERROR;
+    return RESULT_ERROR;
 }
 
 size_t TableLinker::select_module(string name) {
     for (size_t i = 0; i < size; i++)
         if (module_name[i] == name)
             return i;
-    return ERROR;
+    return RESULT_ERROR;
 }
 
 string TableLinker::get_all_module(size_t idx) {
-    if (check_index(idx)) return "";
+    if (check_index(idx)) return "module not found.\n";
     string text =   module_name[idx] + ": " +
                     module_description[idx] + "\n" + 
                     commands_array[idx].get_all();
     return text;
+}
+
+bool TableLinker::check_function_name(string module_name, string func_name) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) return false; // Module not found
+    return commands_array[mod_idx].check_name(func_name);
+}
+
+string TableLinker::get_expected_types_str(string module_name, string func_name) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) return ""; // Module not found
+    return commands_array[mod_idx].get_expected_types_str(func_name);
+}
+
+const char** TableLinker::get_param_types(string module_name, string func_name) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) return nullptr; // Module not found
+    return commands_array[mod_idx].get_param_types(func_name);
+}
+
+bool TableLinker::check_expected_types(string module_name, string func_name, size_t receive) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) return false; // Module not found
+    return commands_array[mod_idx].check_expected_types(func_name, receive);
 }
