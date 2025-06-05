@@ -6,8 +6,6 @@
 #define RESULT_ERROR 255
 #define FUNCTION_NOT_FOUND 254
 #define MODULE_NOT_FOUND 253
-#define EXCEPTION 202
-#define UNKNOWN_EXCEPTION 203
 
 #include <memory>
 #include <functional>
@@ -26,14 +24,14 @@ using namespace std;
 template<typename T>
 constexpr const char* type_code() {
     if      constexpr (is_same<T, uint8_t>::value)   return "u8";
-    else if constexpr (is_same<T, int8_t>::value)    return "i1";
-    else if constexpr (is_same<T, int32_t>::value)   return "i4";
-    else if constexpr (is_same<T, uint32_t>::value)  return "u4";
-    else if constexpr (is_same<T, float>::value)     return "f4";
-    else if constexpr (is_same<T, double>::value)    return "f8";
-    else if constexpr (is_same<T, char>::value)      return "c1";
-    else if constexpr (is_same<T, string>::value)    return "s0";
-    else                                             return "??";  // Unknown type
+    if constexpr (is_same<T, int8_t>::value)    return "i1";
+    if constexpr (is_same<T, int32_t>::value)   return "i4";
+    if constexpr (is_same<T, uint32_t>::value)  return "u4";
+    if constexpr (is_same<T, float>::value)     return "f4";
+    if constexpr (is_same<T, double>::value)    return "f8";
+    if constexpr (is_same<T, char>::value)      return "c1";
+    if constexpr (is_same<T, string>::value)    return "s0";
+    return "??";  // Unknown type
 }
 
 inline void* convert_type_char(const char* data, const char* type_code) {

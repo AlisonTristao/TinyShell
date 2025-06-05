@@ -91,13 +91,7 @@ uint8_t function_manager::call(size_t idx, void** args) {
     if (check_index(idx)) return FUNCTION_NOT_FOUND;
 
     // call the function and return the result
-    try {
-        return func_array[idx]->call(args);
-    } catch (const std::exception& e) {
-        return EXCEPTION;
-    } catch (...) {
-        return UNKNOWN_EXCEPTION;
-    }
+    return func_array[idx]->call(args);
 }
 
 uint8_t function_manager::call(size_t idx) {
