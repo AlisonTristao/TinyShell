@@ -2,7 +2,6 @@
 #define TINY_SHELL_H
 
 #include <TableLinker/TableLinker.h>
-
 #include <string>
 
 using namespace std;
@@ -41,6 +40,7 @@ class TinyShell {
             size_t args_count;
         };
 
+        // parsing
         ParsedCommand parse_command(const string& command);
         string validate_command(const ParsedCommand& cmd);
         void** convert_args(const ParsedCommand& cmd, const char** types, string& error_msg);

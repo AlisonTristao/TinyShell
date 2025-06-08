@@ -1,5 +1,15 @@
 #include <TinyShell.h>
 
+#define SAFE_EXEC(expr) [&]() -> string { \
+    try { \
+        return expr; \
+    } catch (const exception& e) { \
+        return string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__); \
+    } catch (...) { \
+       return "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__); \
+    } \
+}();
+
 string TinyShell::run_line_command(string command) {
     ParsedCommand cmd = parse_command(command);
 
@@ -14,14 +24,18 @@ string TinyShell::run_line_command(string command) {
     if (!conversion_error.empty())
         return conversion_error;
 
-    uint8_t result = call(cmd.module_name, cmd.command_name, args);
+    uint8_t result = 255;
 
-    if (args) delete[] args;
+    return SAFE_EXEC([&]() -> string {
+        result = call(cmd.module_name, cmd.command_name, args);
 
-    if (result != 0)
-        return "Error executing command '" + cmd.command_name + "' in module '" + cmd.module_name + "': " + to_string(result);
+        if (args) delete[] args;
 
-    return "Command '" + cmd.command_name + "' executed successfully in module '" + cmd.module_name + "'";
+        if (result != 0)
+            return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(result) + ".\n";
+
+        return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
+    }());
 }
 
 size_t count_commas(const string& s) {
