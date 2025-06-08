@@ -34,7 +34,17 @@ class TinyShell {
         uint8_t create_module(string mod_name, string mod_description);
     private:
         TableLinker table_linker;
-        
+        struct ParsedCommand {
+            string module_name;
+            string command_name;
+            string args_str;
+            size_t args_count;
+        };
+
+        ParsedCommand parse_command(const string& command);
+        string validate_command(const ParsedCommand& cmd);
+        void** convert_args(const ParsedCommand& cmd, const char** types, string& error_msg);
+
         // checks
         bool check_expected_types(string module_name, string func_name, size_t receive);
         bool check_module_name(string module_name);
