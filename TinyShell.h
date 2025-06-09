@@ -10,10 +10,17 @@ using namespace std;
 // *       Class of TinyShell       *
 // **********************************
 
-// The class recevei a string tipe module -command args0, arg1, arg2, ... argsN
+// The class receives a string type module -command args0, arg1, arg2, ... argsN
 // and run the command with the args
-// if receive a string -h or --help, return the help of the all modules
-// if receive a string module -h, return the help of the module
+
+// The command is a function pointer that is registered in the TableLinker
+// The args are converted to the correct type and passed to the function pointer
+// The args are passed as a void** pointer, so the function can receive any type of args
+// The function pointer is registered in the TableLinker with the name and description
+// The module is registered in the TableLinker with the name and description
+// The module can have multiple functions registered in it  
+// The module can be called with the call function
+// you can create your type to convert the args to the correct type in the TableLinker.h 
 
 class TinyShell {
     public:

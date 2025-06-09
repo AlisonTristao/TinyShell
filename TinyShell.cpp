@@ -1,5 +1,6 @@
 #include <TinyShell.h>
 
+// define a macro to safely execute a command and catch exceptions
 #define SAFE_EXEC(expr) [&]() -> string { \
     try { \
         return expr; \
@@ -11,26 +12,35 @@
 }();
 
 string TinyShell::run_line_command(string command) {
+    // remove leading and trailing whitespace
     ParsedCommand cmd = parse_command(command);
 
+    // verify if the command is valid
     string validation_error = validate_command(cmd);
     if (!validation_error.empty())
         return validation_error;
 
+    // check if the module exists
     const char** types = table_linker.get_param_types(cmd.module_name, cmd.command_name);
 
+    // convert the arguments to the correct types
     string conversion_error;
     void** args = convert_args(cmd, types, conversion_error);
+
+    // if there was an error converting the arguments, return the error
     if (!conversion_error.empty())
         return conversion_error;
 
+    // call the function with the converted arguments using the try catch macro to safely execute the command
     uint8_t result = 255;
-
     return SAFE_EXEC([&]() -> string {
+        // call the function with the converted arguments
         result = call(cmd.module_name, cmd.command_name, args);
 
+        // clean up the allocated memory for the arguments
         if (args) delete[] args;
 
+        // check the result of the command execution
         if (result != 0)
             return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(result) + ".\n";
 
@@ -47,9 +57,11 @@ size_t count_commas(const string& s) {
 TinyShell::ParsedCommand TinyShell::parse_command(const string& command) {
     ParsedCommand result;
 
+    // get the module name
     size_t space_pos = command.find(' ');
     result.module_name = (space_pos == string::npos) ? command : command.substr(0, space_pos);
 
+    // verify if the module name is empty
     size_t command_start = command.find('-');
     if (command_start == string::npos) {
         result.command_name = "";
@@ -58,9 +70,11 @@ TinyShell::ParsedCommand TinyShell::parse_command(const string& command) {
         return result;
     }
 
+    // find the command name and arguments
     size_t command_end = command.find(' ', command_start);
     if (command_end == string::npos) command_end = command.length();
 
+    // extract the command name
     result.command_name = command.substr(command_start + 1, command_end - command_start - 1);
 
     if (command_end < command.length()) {
@@ -89,15 +103,17 @@ string TinyShell::validate_command(const ParsedCommand& cmd) {
 }
 
 void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, string& error_msg) {
-    if (cmd.args_count == 0) return nullptr;
+    if (cmd.args_count == 0 || types == nullptr) return nullptr;
 
     void** args = new void*[cmd.args_count];
     size_t pos = 0;
 
+    // split the args_str by commas and convert each argument to the corresponding type
     for (size_t i = 0; i < cmd.args_count; ++i) {
         size_t next_pos = cmd.args_str.find(',', pos);
         if (next_pos == string::npos) next_pos = cmd.args_str.length();
 
+        // convert the argument to the corresponding type 
         string arg = cmd.args_str.substr(pos, next_pos - pos);
         void* ptr = convert_type_char(arg.c_str(), types[i]);
 
