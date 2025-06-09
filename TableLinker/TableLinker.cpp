@@ -9,18 +9,18 @@ function_manager::~function_manager() {
 }
 
 void function_manager::resize(size_t new_size) {
-    // Allocate new array
+    // allocate new array
     unique_ptr<base_function>* new_func_array = new unique_ptr<base_function>[new_size];
 
-    // Copy the old data
+    // copy the old data
     size_t copy_size = (new_size < size) ? new_size : size;
     for (size_t i = 0; i < copy_size; ++i)
         new_func_array[i] = move(func_array[i]);
 
-    // Delete the old array
+    // delete the old array
     delete[] func_array;
 
-    // Update the pointer and size
+    // update the pointer and size
     func_array = new_func_array;
     size = new_size;
 }
@@ -58,8 +58,12 @@ string function_manager::get_expected_types_str(string name) {
 
 string function_manager::get_expected_types_str(size_t idx) {
     if (check_index(idx)) return "";
+    
+    // get the expected types from the function
     const char** types = func_array[idx]->get_param_types();
     size_t size_param = func_array[idx]->get_size();
+
+    // concatenate the types into a string
     string expected_types = "(";
     for (size_t i = 0; i < size_param; i++) {
         expected_types += types[i];
@@ -67,6 +71,7 @@ string function_manager::get_expected_types_str(size_t idx) {
             expected_types += ", ";
     }
     expected_types += ")";
+
     return expected_types;
 }
 
@@ -154,7 +159,7 @@ void TableLinker::resize(size_t new_size) {
     delete[] module_name;
     delete[] module_description;
 
-    // Update the pointers and the new size
+    // update the pointers and the new size
     commands_array = new_commands;
     module_name = new_names;
     module_description = new_descriptions;
