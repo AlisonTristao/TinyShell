@@ -167,9 +167,9 @@ void TableLinker::resize(size_t new_size) {
 }
 
 uint8_t TableLinker::create_module(string mod_name, string mod_description) {
-    // Check if the module already exists
+    // check if the module already exists
     if (check_module_name(mod_name)) return MODULE_NOT_FOUND; // Module already exists
-    // Find the next available index
+    // find the next available index
     return create_module(size, mod_name, mod_description);
 }
 
@@ -192,12 +192,12 @@ uint8_t TableLinker::call(string module_name, string func_name) {
 }
 
 uint8_t TableLinker::create_module(size_t idx, string mod_name, string mod_description) {
-    // Resize the array if necessary
+    // resize the array if necessary
     if (idx == size) resize(size + 1);
 
-    if (check_index(idx)) return MODULE_NOT_FOUND; // Index out of bounds
+    if (check_index(idx)) return MODULE_NOT_FOUND; // index out of bounds
 
-    // Set the module name and description
+    // set the module name and description
     module_name[idx] = mod_name;
     module_description[idx] = mod_description;
     return RESULT_OK;

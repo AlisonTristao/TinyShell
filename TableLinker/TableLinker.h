@@ -23,7 +23,7 @@ using namespace std;
 
 template<typename T>
 constexpr const char* type_code() {
-    if      constexpr (is_same<T, uint8_t>::value)   return "u8";
+    if constexpr (is_same<T, uint8_t>::value)   return "u8";
     if constexpr (is_same<T, int8_t>::value)    return "i1";
     if constexpr (is_same<T, int32_t>::value)   return "i4";
     if constexpr (is_same<T, uint32_t>::value)  return "u4";
@@ -40,8 +40,8 @@ inline void* convert_type_char(const char* data, const char* type_code) {
     if (strcmp(type_code, "f4") == 0) return new float(atof(data));
     if (strcmp(type_code, "f8") == 0) return new double(atof(data));
     if (strcmp(type_code, "c1") == 0) return new char(data[0]);
-    if (strcmp(type_code, "s0") == 0) return new std::string(data);
-    throw std::invalid_argument("Unknown type code");
+    if (strcmp(type_code, "s0") == 0) return new string(data);
+    throw invalid_argument("Unknown type code");
 }
 
 // *************************************
