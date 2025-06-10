@@ -1,5 +1,4 @@
 #include <TinyShell.h>
-#include <Arduino.h>
 
 // define a macro to safely execute a command and catch exceptions
 #define SAFE_EXEC(expr) [&]() -> string { \
