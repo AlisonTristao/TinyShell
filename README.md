@@ -35,7 +35,7 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
     ```cpp
     template<typename T>
     constexpr const char* type_code() {
-        if constexpr (is_same<T, uint8_t>::value)   return "u8";
+        if constexpr (is_same<T, uint8_t>::value)   return "u1";
         if constexpr (is_same<T, int8_t>::value)    return "i1";
         if constexpr (is_same<T, int32_t>::value)   return "i4";
         if constexpr (is_same<T, uint32_t>::value)  return "u4";
@@ -47,7 +47,7 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
     }
 
     inline void* convert_type_char(const char* data, const char* type_code) {
-        if (strcmp(type_code, "u8") == 0) return new uint8_t(static_cast<uint8_t>(atoi(data)));
+        if (strcmp(type_code, "u1") == 0) return new uint8_t(static_cast<uint8_t>(atoi(data)));
         if (strcmp(type_code, "i4") == 0) return new int32_t(atoi(data));
         if (strcmp(type_code, "f4") == 0) return new float(atof(data));
         if (strcmp(type_code, "f8") == 0) return new double(atof(data));
