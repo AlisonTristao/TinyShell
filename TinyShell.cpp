@@ -1,4 +1,5 @@
 #include <TinyShell.h>
+#include <Arduino.h>
 
 // define a macro to safely execute a command and catch exceptions
 #define SAFE_EXEC(expr) [&]() -> string { \
@@ -22,30 +23,32 @@ string TinyShell::run_line_command(string command) {
 
     // check if the module exists
     const char** types = table_linker.get_param_types(cmd.module_name, cmd.command_name);
+    string result_text;
+    void** args = nullptr;
 
-    // convert the arguments to the correct types
-    string conversion_error;
-    void** args = convert_args(cmd, types, conversion_error);
+    args = convert_args(cmd, types, result_text);
 
-    // if there was an error converting the arguments, return the error
-    if (!conversion_error.empty())
-        return conversion_error;
+    // if the args conversion failed, return the error message
+    if (result_text.empty())
 
-    // call the function with the converted arguments using the try catch macro to safely execute the command
-    uint8_t result = 255;
-    return SAFE_EXEC([&]() -> string {
-        // call the function with the converted arguments
-        result = call(cmd.module_name, cmd.command_name, args);
+        // try to call the command with the converted arguments
+        result_text = SAFE_EXEC([&]() -> string {
+            // call the function with the converted arguments
+            uint8_t result = call(cmd.module_name, cmd.command_name, args);
 
-        // clean up the allocated memory for the arguments
-        if (args) delete[] args;
+            // check the result of the command execution
+            if (result != 0)
+                return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(result) + ".\n";
 
-        // check the result of the command execution
-        if (result != 0)
-            return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(result) + ".\n";
+            return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
+        }());
 
-        return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
-    }());
+    // clean up the allocated memory
+    delete[] args;
+    delete[] types;
+    
+    // return the result of the command execution
+    return result_text;
 }
 
 size_t count_commas(const string& s) {
@@ -113,15 +116,25 @@ void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, str
         size_t next_pos = cmd.args_str.find(',', pos);
         if (next_pos == string::npos) next_pos = cmd.args_str.length();
 
-        // convert the argument to the corresponding type 
+        // get the argument substring
         string arg = cmd.args_str.substr(pos, next_pos - pos);
-        void* ptr = convert_type_char(arg.c_str(), types[i]);
 
-        if (ptr == nullptr) {
-            delete[] args;
-            error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "'";
-            return nullptr;
-        }
+        // remove leading and trailing whitespace from the argument
+        arg.erase(0, arg.find_first_not_of(' '));
+        arg.erase(arg.find_last_not_of(' ') + 1);
+
+        // convert the argument to the corresponding type using safe conversion
+        void* ptr = nullptr;
+        string result_text = SAFE_EXEC([&]() -> string {
+            ptr = convert_type_char(arg.c_str(), types[i]);
+            if (ptr == nullptr)
+                error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "'";
+            return "";
+        }());
+
+        if (!result_text.empty())
+            // break the loop if an error occurred during conversion
+            break;
 
         args[i] = ptr;
         pos = next_pos + 1;
