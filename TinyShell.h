@@ -22,8 +22,14 @@ using namespace std;
 // The module can be called with the call function
 // you can create your type to convert the args to the correct type in the TableLinker.h 
 
+/**
+ * @brief TinyShell class provides a shell-like interface for managing modules and commands.
+ */
 class TinyShell {
     public:
+        /**
+         * @brief Default constructor for TinyShell.
+         */
         TinyShell() {}
 
         /*
@@ -49,9 +55,7 @@ class TinyShell {
             @return return the result of the function
         */
         template<typename... param>
-        uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name) {
-            return table_linker.add_func_to_module(module_name, func, name, description);
-        }
+        uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name);
 
         /*
             @brief create a module
@@ -69,20 +73,68 @@ class TinyShell {
             size_t args_count;
         };
 
-        // parsing
+        /**
+         * @brief Parses a command string into its components.
+         * @param command The command string to parse.
+         * @return ParsedCommand structure containing parsed data.
+         */
         ParsedCommand parse_command(const string& command);
+
+        /**
+         * @brief Validates a parsed command.
+         * @param cmd The parsed command to validate.
+         * @return Error message if invalid, empty string if valid.
+         */
         string validate_command(const ParsedCommand& cmd);
+
+        /**
+         * @brief Converts command arguments to appropriate types.
+         * @param cmd The parsed command containing arguments.
+         * @param types Array of expected argument types.
+         * @param error_msg Reference to error message string.
+         * @return Array of converted arguments as void pointers.
+         */
         void** convert_args(const ParsedCommand& cmd, const char** types, string& error_msg);
 
-        // checks
+        /**
+         * @brief Checks if the received argument types match the expected types for a function.
+         * @param module_name Name of the module.
+         * @param func_name Name of the function.
+         * @param receive Number of received arguments.
+         * @return True if types match, false otherwise.
+         */
         bool check_expected_types(string module_name, string func_name, size_t receive);
+
+        /**
+         * @brief Checks if a module name exists.
+         * @param module_name Name of the module to check.
+         * @return True if module exists, false otherwise.
+         */
         bool check_module_name(string module_name);
+
+        /**
+         * @brief Checks if a function name exists within a module.
+         * @param module_name Name of the module.
+         * @param func_name Name of the function to check.
+         * @return True if function exists, false otherwise.
+         */
         bool check_function_name(string module_name, string func_name);
-        
-        // gets
+
+        /**
+         * @brief Gets the expected argument types for a function in a module.
+         * @param module_name Name of the module.
+         * @param func_name Name of the function.
+         * @return String describing expected types.
+         */
         string get_expected_types(string module_name, string func_name);
 
-        // call
+        /**
+         * @brief Calls a function within a module with given arguments.
+         * @param module_name Name of the module.
+         * @param func_name Name of the function.
+         * @param args Arguments to pass to the function.
+         * @return Result of the function call.
+         */
         uint8_t call(string module_name, string func_name, void** args = nullptr);
     };
 
