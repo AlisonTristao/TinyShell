@@ -26,17 +26,39 @@ class TinyShell {
     public:
         TinyShell() {}
 
-        // helper
+        /*
+            @brief helper to know about the module
+            @param module_name: name of the module to get help, if empty return all modules
+            @return return all itens inside the module
+        */
         string get_help(string module_name = "");
 
-        // calls
+        /*
+            @brief run a command line
+            @param command: the command line to run
+            @return return the result of the function
+        */
         string run_line_command(string command);
 
-        // adds
+        /*
+            @brief add a function to a module
+            @param func: the function to add
+            @param name: the name of the function
+            @param description: the description of the function
+            @param module_name: the name of the module
+            @return return the result of the function
+        */
         template<typename... param>
         uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name) {
             return table_linker.add_func_to_module(module_name, func, name, description);
         }
+
+        /*
+            @brief create a module
+            @param mod_name: the name of the module
+            @param mod_description: the description of the module
+            @return return the result of the function
+        */
         uint8_t create_module(string mod_name, string mod_description);
     private:
         TableLinker table_linker;
