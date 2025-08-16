@@ -1,5 +1,4 @@
 #include "TableLinker.h"
-#include <Arduino.h>
 
 function_manager::~function_manager() {
     // unique_ptr destroys pointees automatically; we just delete the array
