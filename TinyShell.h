@@ -55,7 +55,9 @@ class TinyShell {
             @return return the result of the function
         */
         template<typename... param>
-        uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name);
+        uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name) {
+            return table_linker.add_func_to_module(module_name, func, name, description);
+        }
 
         /*
             @brief create a module
