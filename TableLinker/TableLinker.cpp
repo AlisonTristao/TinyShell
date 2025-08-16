@@ -1,5 +1,4 @@
 #include "TableLinker.h"
-#include <Arduino.h>
 
 function_manager::function_manager(size_t size) : size(size) {
     func_array = (size > 0) ? new unique_ptr<base_function>[size] : nullptr;
