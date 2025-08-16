@@ -1,4 +1,5 @@
 #include "TableLinker.h"
+#include <Arduino.h>
 
 function_manager::function_manager(size_t size) : size(size) {
     func_array = (size > 0) ? new unique_ptr<base_function>[size] : nullptr;
@@ -15,7 +16,7 @@ void function_manager::resize(size_t new_size) {
     // copy the old data
     size_t copy_size = (new_size < size) ? new_size : size;
     for (size_t i = 0; i < copy_size; ++i)
-        new_func_array[i] = move(func_array[i]);
+        new_func_array[i] = func_array[i]->clone();
 
     // delete the old array
     delete[] func_array;

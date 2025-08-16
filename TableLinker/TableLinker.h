@@ -55,6 +55,7 @@ class base_function {
             delete[] param_types;
         }
         virtual uint8_t call(void** args) = 0;
+        virtual unique_ptr<base_function> clone() const = 0;
         const char** get_param_types() { return param_types; };
         size_t get_size() const { return size; }
         string get_name() { return name; }
@@ -80,6 +81,9 @@ class class_function : public base_function {
             size_t i = 0;
             using expander = int[];
             (void)expander{0, ((param_types[i++] = type_code<param>()), 0)...};
+        }
+        unique_ptr<base_function> clone() const override {
+            return make_unique<class_function>(*this);
         }
 
         // This function is called to invoke the stored function
