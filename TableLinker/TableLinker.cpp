@@ -1,11 +1,46 @@
 #include "TableLinker.h"
+#include <Arduino.h>
+
+function_manager::~function_manager() {
+    // unique_ptr destroys pointees automatically; we just delete the array
+    delete[] func_array;
+    func_array = nullptr;
+    size = 0;
+}
+
+// copy constructor (deep copy)
+function_manager::function_manager(const function_manager& other)
+    : func_array(nullptr), size(other.size) {
+    if (size == 0) return;
+
+    // allocate the new array
+    func_array = new unique_ptr<base_function>[size];
+
+    // deep copy each element via virtual clone()
+    for (size_t i = 0; i < size; ++i) {
+        if (other.func_array[i]) {
+            func_array[i] = other.func_array[i]->clone(); // deep copy of the pointee
+        } else {
+            func_array[i] = nullptr;
+        }
+    }
+}
+
+// copy assignment (copy-and-swap)
+function_manager& function_manager::operator=(const function_manager& other) {
+    if (this == &other) return *this;
+
+    // make a deep-copied temp using the copy ctor
+    function_manager tmp(other);
+
+    // swap members (noexcept)
+    swap(func_array, tmp.func_array);
+    swap(size, tmp.size);
+    return *this;
+}
 
 function_manager::function_manager(size_t size) : size(size) {
     func_array = (size > 0) ? new unique_ptr<base_function>[size] : nullptr;
-}
-
-function_manager::~function_manager() {
-    delete[] func_array;
 }
 
 void function_manager::resize(size_t new_size) {
@@ -14,8 +49,9 @@ void function_manager::resize(size_t new_size) {
 
     // copy the old data
     size_t copy_size = (new_size < size) ? new_size : size;
-    for (size_t i = 0; i < copy_size; ++i)
-        new_func_array[i] = func_array[i]->clone();
+    for (size_t i = 0; i < copy_size; ++i) {
+        new_func_array[i] = func_array[i]->clone(); // deep copy of the pointee
+    }
 
     // delete the old array
     delete[] func_array;

@@ -51,9 +51,33 @@ inline void* convert_type_char(const char* data, const char* type_code) {
 // abstract class to create the generics
 class base_function {
     public:
-        virtual ~base_function() {
-            delete[] param_types;
+        base_function() : param_types(nullptr), size(0) {}   // <--- Faltava isso
+        virtual ~base_function() { delete[] param_types; }
+        
+        base_function(const base_function& other) : name(other.name), description(other.description), size(other.size) {
+            if (other.param_types && size) {
+                param_types = new const char*[size];
+                for (size_t i = 0; i < size; ++i) param_types[i] = other.param_types[i];
+            } else {
+                param_types = nullptr;
+            }
         }
+
+        base_function& operator=(const base_function& other) {
+            if (this == &other) return *this;
+            delete[] param_types;
+            size = other.size;
+            name = other.name;
+            description = other.description;
+            if (other.param_types && size) {
+                param_types = new const char*[size];
+                for (size_t i = 0; i < size; ++i) param_types[i] = other.param_types[i];
+            } else {
+                param_types = nullptr;
+            }
+            return *this;
+        }
+
         virtual uint8_t call(void** args) = 0;
         virtual unique_ptr<base_function> clone() const = 0;
         const char** get_param_types() { return param_types; };
@@ -121,6 +145,10 @@ class function_manager {
         function_manager() : func_array(nullptr), size(0) {}
         function_manager(size_t size);
         ~function_manager();
+
+        // clone
+        function_manager(const function_manager& other);
+        function_manager& operator=(const function_manager& other);
 
         // gets
         const char** get_param_types(string name);
