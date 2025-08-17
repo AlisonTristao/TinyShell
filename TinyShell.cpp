@@ -44,8 +44,7 @@ string TinyShell::run_line_command(string command) {
 
     // clean up the allocated memory
     delete[] args;
-    delete[] types;
-    
+
     // return the result of the command execution
     return result_text;
 }
