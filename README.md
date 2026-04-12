@@ -30,7 +30,7 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
     ```
     module -function arg0, arg1, arg2, ..., argN
     ```
-* **Escaped Comma in Arguments:** Use `\\,` when you need a literal comma inside one argument.
+* **Escaped Comma in Arguments:** Use `\,` when you need a literal comma inside one argument.
 
     ```
     espnow -send_to 2, HB -apply_pwm 50\, 50
