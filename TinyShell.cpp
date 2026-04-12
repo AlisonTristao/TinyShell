@@ -51,8 +51,77 @@ string TinyShell::run_line_command(string command) {
 
 size_t count_commas(const string& s) {
     size_t count = 0;
-    for (char c : s) if (c == ',') ++count;
+    bool escaped = false;
+    for (char c : s) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+
+        if (c == ',') {
+            ++count;
+        }
+    }
     return count;
+}
+
+size_t find_next_unescaped_comma(const string& s, size_t start_pos) {
+    bool escaped = false;
+    for (size_t i = start_pos; i < s.length(); ++i) {
+        const char c = s[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+
+        if (c == ',') {
+            return i;
+        }
+    }
+
+    return string::npos;
+}
+
+string unescape_commas(const string& text) {
+    string out;
+    out.reserve(text.length());
+
+    bool escaped = false;
+    for (char c : text) {
+        if (escaped) {
+            if (c == ',' || c == '\\') {
+                out.push_back(c);
+            } else {
+                out.push_back('\\');
+                out.push_back(c);
+            }
+            escaped = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+
+        out.push_back(c);
+    }
+
+    if (escaped) {
+        out.push_back('\\');
+    }
+
+    return out;
 }
 
 TinyShell::ParsedCommand TinyShell::parse_command(const string& command) {
@@ -111,15 +180,23 @@ void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, str
 
     // split the args_str by commas and convert each argument to the corresponding type
     for (size_t i = 0; i < cmd.args_count; ++i) {
-        size_t next_pos = cmd.args_str.find(',', pos);
+        size_t next_pos = find_next_unescaped_comma(cmd.args_str, pos);
         if (next_pos == string::npos) next_pos = cmd.args_str.length();
 
         // get the argument substring
         string arg = cmd.args_str.substr(pos, next_pos - pos);
 
         // remove leading and trailing whitespace from the argument
-        arg.erase(0, arg.find_first_not_of(' '));
-        arg.erase(arg.find_last_not_of(' ') + 1);
+        const size_t first = arg.find_first_not_of(' ');
+        if (first == string::npos) {
+            arg.clear();
+        } else {
+            arg.erase(0, first);
+            arg.erase(arg.find_last_not_of(' ') + 1);
+        }
+
+        // decode escaped commas (\,) and escaped backslash (\\)
+        arg = unescape_commas(arg);
 
         // convert the argument to the corresponding type using safe conversion
         void* ptr = nullptr;
