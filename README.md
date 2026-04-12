@@ -33,10 +33,10 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
 * **Escaped Comma in Arguments:** Use `\,` when you need a literal comma inside one argument.
 
     ```
-    espnow -send_to 2, HB -apply_pwm 50\, 50
+    modulo -func arg1, hello\, word, arg3
     ```
 
-    In this case, the payload argument is parsed as `HB -apply_pwm 50, 50` (single argument).
+    In this case, the payload argument is parsed as `hello, word` (single argument).
 * **Argument Types:** Argument types are represented by 2-character strings, like `i4`, `u8`, `s0`, etc. You can add your own types in the `tablelinker.h` header file.
 
     ```cpp
