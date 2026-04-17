@@ -1,52 +1,70 @@
 #include <TinyShell.h>
 
-// define a macro to safely execute a command and catch exceptions
-#define SAFE_EXEC(expr) [&]() -> string { \
-    try { \
-        return expr; \
-    } catch (const exception& e) { \
-        return string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__); \
-    } catch (...) { \
-       return "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__); \
-    } \
-}();
+namespace {
+
+string format_shell_response(uint8_t code, const string& verbose_text) {
+#if defined(HARD_VERBOSE)
+    (void)code;
+    (void)verbose_text;
+    return "";
+#elif defined(VERBOSE)
+    return to_string(code) + "\n";
+#else
+    return verbose_text;
+#endif
+}
+
+} // namespace
 
 string TinyShell::run_line_command(string command) {
     // remove leading and trailing whitespace
     ParsedCommand cmd = parse_command(command);
+    uint8_t status_code = RESULT_OK;
 
     // verify if the command is valid
-    string validation_error = validate_command(cmd);
-    if (!validation_error.empty())
-        return validation_error;
+    string validation_text = validate_command(cmd, status_code);
+    if (status_code != RESULT_OK)
+        return format_shell_response(status_code, validation_text);
 
-    // check if the module exists
     const char** types = table_linker.get_param_types(cmd.module_name, cmd.command_name);
     string result_text;
     void** args = nullptr;
 
     args = convert_args(cmd, types, result_text);
 
-    // if the args conversion failed, return the error message
-    if (result_text.empty())
+    // if the args conversion failed, keep RESULT_ERROR and skip execution
+    if (!result_text.empty()) {
+        status_code = RESULT_ERROR;
+    } else {
+        try {
+            status_code = call(cmd.module_name, cmd.command_name, args);
 
-        // try to call the command with the converted arguments
-        result_text = SAFE_EXEC([&]() -> string {
-            // call the function with the converted arguments
-            uint8_t result = call(cmd.module_name, cmd.command_name, args);
+            if (status_code != RESULT_OK) {
+                result_text = "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(status_code) + ".\n";
+            } else {
+                result_text = "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
+            }
+        } catch (const exception& e) {
+            status_code = RESULT_ERROR;
+            result_text = string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
+        } catch (...) {
+            status_code = RESULT_ERROR;
+            result_text = "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
+        }
+    }
 
-            // check the result of the command execution
-            if (result != 0)
-                return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(result) + ".\n";
+    // clean up converted arguments
+    if (args != nullptr && types != nullptr) {
+        for (size_t i = 0; i < cmd.args_count; ++i) {
+            destroy_type_char(args[i], types[i]);
+        }
+    }
 
-            return "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
-        }());
-
-    // clean up the allocated memory
+    // clean up the pointer array
     delete[] args;
 
     // return the result of the command execution
-    return result_text;
+    return format_shell_response(status_code, result_text);
 }
 
 size_t count_commas(const string& s) {
@@ -158,16 +176,24 @@ TinyShell::ParsedCommand TinyShell::parse_command(const string& command) {
     return result;
 }
 
-string TinyShell::validate_command(const ParsedCommand& cmd) {
-    if (!check_module_name(cmd.module_name))
-        return "Module '" + cmd.module_name + "' not found.\n\n" + get_help();
+string TinyShell::validate_command(const ParsedCommand& cmd, uint8_t& error_code) {
+    error_code = RESULT_OK;
 
-    if (!check_function_name(cmd.module_name, cmd.command_name))
+    if (!check_module_name(cmd.module_name)) {
+        error_code = MODULE_NOT_FOUND;
+        return "Module '" + cmd.module_name + "' not found.\n\n" + get_help();
+    }
+
+    if (!check_function_name(cmd.module_name, cmd.command_name)) {
+        error_code = FUNCTION_NOT_FOUND;
         return "Command '" + cmd.command_name + "' not found in module '" + cmd.module_name + "'\n\n" +
                get_help(cmd.module_name);
+    }
 
-    if (!check_expected_types(cmd.module_name, cmd.command_name, cmd.args_count))
+    if (!check_expected_types(cmd.module_name, cmd.command_name, cmd.args_count)) {
+        error_code = RESULT_ERROR;
         return get_expected_types(cmd.module_name, cmd.command_name);
+    }
 
     return "";
 }
@@ -175,7 +201,7 @@ string TinyShell::validate_command(const ParsedCommand& cmd) {
 void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, string& error_msg) {
     if (cmd.args_count == 0 || types == nullptr) return nullptr;
 
-    void** args = new void*[cmd.args_count];
+    void** args = new void*[cmd.args_count]{};
     size_t pos = 0;
 
     // split the args_str by commas and convert each argument to the corresponding type
@@ -198,18 +224,26 @@ void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, str
         // decode escaped commas (\,) and escaped backslash (\\)
         arg = unescape_commas(arg);
 
-        // convert the argument to the corresponding type using safe conversion
+        // convert the argument to the corresponding type
         void* ptr = nullptr;
-        string result_text = SAFE_EXEC([&]() -> string {
+        try {
             ptr = convert_type_char(arg.c_str(), types[i]);
-            if (ptr == nullptr)
+            if (ptr == nullptr) {
                 error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "'";
-            return "";
-        }());
+            }
+        } catch (const exception& e) {
+            error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "': " + string(e.what());
+        } catch (...) {
+            error_msg = "Unknown error converting argument '" + arg + "' to type '" + types[i] + "'";
+        }
 
-        if (!result_text.empty())
-            // break the loop if an error occurred during conversion
-            break;
+        if (!error_msg.empty()) {
+            for (size_t j = 0; j < i; ++j) {
+                destroy_type_char(args[j], types[j]);
+            }
+            delete[] args;
+            return nullptr;
+        }
 
         args[i] = ptr;
         pos = next_pos + 1;

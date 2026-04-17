@@ -9,40 +9,17 @@
 
 #include <memory>
 #include <functional>
-#include <typeindex>
-#include <typeinfo>
 #include <utility>
 #include <string>
-#include <cstring>
+#include <type_traits>
 
 using namespace std;
 
 // ****************************************
-// * Templates to converte typeid to char *
+// * Type conversion helpers (separated)  *
 // ****************************************
 
-template<typename T>
-constexpr const char* type_code() {
-    if constexpr (is_same<T, uint8_t>::value)   return "u1";
-    if constexpr (is_same<T, int8_t>::value)    return "i1";
-    if constexpr (is_same<T, int32_t>::value)   return "i4";
-    if constexpr (is_same<T, uint32_t>::value)  return "u4";
-    if constexpr (is_same<T, float>::value)     return "f4";
-    if constexpr (is_same<T, double>::value)    return "f8";
-    if constexpr (is_same<T, char>::value)      return "c1";
-    if constexpr (is_same<T, string>::value)    return "s0";
-    return "??";  // Unknown type
-}
-
-inline void* convert_type_char(const char* data, const char* type_code) {
-    if (strcmp(type_code, "u1") == 0) return new uint8_t(static_cast<uint8_t>(atoi(data)));
-    if (strcmp(type_code, "i4") == 0) return new int32_t(atoi(data));
-    if (strcmp(type_code, "f4") == 0) return new float(atof(data));
-    if (strcmp(type_code, "f8") == 0) return new double(atof(data));
-    if (strcmp(type_code, "c1") == 0) return new char(data[0]);
-    if (strcmp(type_code, "s0") == 0) return new string(data);
-    throw invalid_argument("Unknown type code");
-}
+#include "TypeConversion.h"
 
 // *************************************
 // * Class to create generic functions *
@@ -104,7 +81,7 @@ class class_function : public base_function {
             // Convert each parameter type to a single identifying character
             size_t i = 0;
             using expander = int[];
-            (void)expander{0, ((param_types[i++] = type_code<param>()), 0)...};
+            (void)expander{0, ((param_types[i++] = type_code<typename decay<param>::type>()), 0)...};
         }
         unique_ptr<base_function> clone() const override {
             return make_unique<class_function>(*this);

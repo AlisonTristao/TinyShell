@@ -6,6 +6,11 @@
 
 using namespace std;
 
+// Output modes:
+// - Default: human-readable messages
+// - VERBOSE: returns only numeric status codes ("<code>\n")
+// - HARD_VERBOSE: returns no text (empty string)
+
 // **********************************
 // *       Class of TinyShell       *
 // **********************************
@@ -20,7 +25,7 @@ using namespace std;
 // The module is registered in the TableLinker with the name and description
 // The module can have multiple functions registered in it  
 // The module can be called with the call function
-// you can create your type to convert the args to the correct type in the TableLinker.h 
+// you can create custom argument converters in TableLinker/UserTypeConverters.h
 
 /**
  * @brief TinyShell class provides a shell-like interface for managing modules and commands.
@@ -85,9 +90,10 @@ class TinyShell {
         /**
          * @brief Validates a parsed command.
          * @param cmd The parsed command to validate.
+         * @param error_code Numeric error code generated during validation.
          * @return Error message if invalid, empty string if valid.
          */
-        string validate_command(const ParsedCommand& cmd);
+        string validate_command(const ParsedCommand& cmd, uint8_t& error_code);
 
         /**
          * @brief Converts command arguments to appropriate types.

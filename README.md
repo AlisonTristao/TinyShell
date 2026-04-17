@@ -37,34 +37,55 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
     ```
 
     In this case, the payload argument is parsed as `hello, john` (single argument).
-* **Argument Types:** Argument types are represented by 2-character strings, like `i4`, `u8`, `s0`, etc. You can add your own types in the `tablelinker.h` header file.
+* **Argument Types:** Argument types are represented by short codes. Core built-in support currently includes:
+
+    ```
+    i1 u1 i2 u2 i4 u4 i8 u8 b1 f4 f8 c1 s0
+    ```
+
+    Notes:
+    - integer and floating-point conversions now validate format and range
+    - boolean conversion accepts: `1/0`, `true/false`, `on/off`, `yes/no`
+    - char conversion accepts single char, quoted char (`'a'`) and escaped chars (`'\\n'`, `'\\t'`, ...)
+
+* **Code Organization:**
+    - core built-in conversion logic lives in `TableLinker/TypeConversion.h`
+    - custom user conversion hooks live in `TableLinker/UserTypeConverters.h`
+
+* **Custom Types:** implement your own converters in `TableLinker/UserTypeConverters.h`.
 
     ```cpp
-    template<typename T>
-    constexpr const char* type_code() {
-        if constexpr (is_same<T, uint8_t>::value)   return "u1";
-        if constexpr (is_same<T, int8_t>::value)    return "i1";
-        if constexpr (is_same<T, int32_t>::value)   return "i4";
-        if constexpr (is_same<T, uint32_t>::value)  return "u4";
-        if constexpr (is_same<T, float>::value)     return "f4";
-        if constexpr (is_same<T, double>::value)    return "f8";
-        if constexpr (is_same<T, char>::value)      return "c1";
-        if constexpr (is_same<T, string>::value)    return "s0";
-        return "??";  // Unknown type
-    }
+    namespace TinyShellUserConverters {
+      inline bool convert_type_custom(const char* data,
+                                      const char* type_code,
+                                      void*& out_ptr,
+                                      std::string& error_msg);
 
-    inline void* convert_type_char(const char* data, const char* type_code) {
-        if (strcmp(type_code, "u1") == 0) return new uint8_t(static_cast<uint8_t>(atoi(data)));
-        if (strcmp(type_code, "i4") == 0) return new int32_t(atoi(data));
-        if (strcmp(type_code, "f4") == 0) return new float(atof(data));
-        if (strcmp(type_code, "f8") == 0) return new double(atof(data));
-        if (strcmp(type_code, "c1") == 0) return new char(data[0]);
-        if (strcmp(type_code, "s0") == 0) return new string(data);
-        throw invalid_argument("Unknown type code");
+      inline bool destroy_type_custom(void* ptr,
+                                      const char* type_code);
     }
     ```
-* **Verbose mode:** You can turn off verbose mode by defining.
+
+    - return `false` when your converter does not handle that `type_code`
+    - when handled, allocate/deallocate consistently with your parameter type
+* **Output Modes (compile-time):**
+
+    Default (no macro): human-readable messages.
 
     ```c++
-    #define VERBOSE_OFF
+    // no define needed
     ```
+
+    `VERBOSE`: returns only numeric status codes (no extra text).
+
+    ```c++
+    #define VERBOSE
+    ```
+
+    `HARD_VERBOSE`: returns no text at all (not even errors).
+
+    ```c++
+    #define HARD_VERBOSE
+    ```
+
+    If both are defined, `HARD_VERBOSE` has priority.
