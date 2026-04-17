@@ -3,11 +3,11 @@
 namespace {
 
 string format_shell_response(uint8_t code, const string& verbose_text) {
-#if defined(HARD_VERBOSE)
+#if defined(HARD_VERBOSE_OFF)
     (void)code;
     (void)verbose_text;
     return "";
-#elif defined(VERBOSE)
+#elif defined(VERBOSE_OFF)
     return to_string(code) + "\n";
 #else
     return verbose_text;
