@@ -79,13 +79,13 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
     `VERBOSE`: returns only numeric status codes (no extra text).
 
     ```c++
-    #define VERBOSE
+    #define VERBOSE_OFF
     ```
 
     `HARD_VERBOSE`: returns no text at all (not even errors).
 
     ```c++
-    #define HARD_VERBOSE
+    #define HARD_VERBOSE_OFF
     ```
 
     If both are defined, `HARD_VERBOSE` has priority.
