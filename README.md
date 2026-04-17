@@ -33,7 +33,7 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
 * **Escaped Comma in Arguments:** Use `\,` when you need a literal comma inside one argument.
 
     ```
-    modulo -func arg1, hello\, john, arg3
+    modulo -function arg1, hello\, john, arg3
     ```
 
     In this case, the payload argument is parsed as `hello, john` (single argument).
