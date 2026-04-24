@@ -43,7 +43,7 @@ bool starts_with(const string& text, const string& prefix) {
 
 } // namespace
 
-string TinyShell::run_line_command(string command) {
+string TinyShell::run_command_line(string command) {
     // remove leading and trailing whitespace
     ParsedCommand cmd = parse_command(command);
     uint8_t status_code = RESULT_OK;

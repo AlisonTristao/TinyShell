@@ -5,7 +5,7 @@
 TinyShell ts;
 
     /*
-    * the sintaxe to send commands to the shell is:
+    * the syntax to send commands to the shell is:
     * <module> -<command> [args]
     * 
     * where:
@@ -124,7 +124,7 @@ void loop() {
             Serial.println("Received command: " + commandBuffer);
 
             // run the command in the shell
-            string response = ts.run_line_command(commandBuffer.c_str());
+            string response = ts.run_command_line(commandBuffer.c_str());
 
             delay(100);  // give some time for the shell to process the command
             Serial.println(String(response.c_str()));

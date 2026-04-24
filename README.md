@@ -15,7 +15,7 @@ Current version: **0.2.0+autocomplete**
 
 This library is a tool for **executing functions via text commands**. It uses a **table** to store **function pointers**, each associated with a **name** and a **description**.
 
-When you pass a **formatted string** to the `run_line_command` function, the library **searches for the function name** in this list and, if found, **executes it**.
+When you pass a **formatted string** to the `run_command_line` function, the library **searches for the function name** in this list and, if found, **executes it**.
 
 ---
 
@@ -35,7 +35,7 @@ When you pass a **formatted string** to the `run_line_command` function, the lib
         return RESULT_OK;  // return 0 to indicate success
     }
     ```
-* **Command Format:** The string expected by the `run_line_command` function follows this format:
+* **Command Format:** The string expected by the `run_command_line` function follows this format:
 
     ```
     module -function arg0, arg1, arg2, ..., argN

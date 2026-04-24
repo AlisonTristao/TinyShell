@@ -39,9 +39,9 @@ class TinyShell {
         TinyShell() {}
 
         /**
-         * @brief helper to know about the module
+         * @brief Retrieve module information.
          * @param module_name: name of the module to get help, if empty return all modules
-         * @return return all itens inside the module
+         * @return return all items inside the module
          */
         string get_help(string module_name = "");
 
@@ -50,7 +50,7 @@ class TinyShell {
          * @param command: the command line to run
          * @return return the result of the function
          */
-        string run_line_command(string command);
+        string run_command_line(string command);
 
         /**
          * @brief Returns line-completion candidates for a partial shell input.
