@@ -3,6 +3,7 @@
 
 #include <TableLinker/TableLinker.h>
 #include <string>
+#include <vector>
 
 using namespace std;
 
@@ -50,6 +51,19 @@ class TinyShell {
          * @return return the result of the function
          */
         string run_line_command(string command);
+
+        /**
+         * @brief Returns line-completion candidates for a partial shell input.
+         *
+         * Examples:
+         * - "do" -> ["dongle "]
+         * - "dongle -l" -> ["dongle -lcd ", "dongle -led ", ...]
+         *
+         * @param partial_command Partial command line being typed by the user.
+         * @param max_results Maximum number of candidates to return.
+         * @return List of full-line suggestions.
+         */
+        vector<string> complete_line(const string& partial_command, size_t max_results = 16);
 
         /**
          * @brief add a function to a module
