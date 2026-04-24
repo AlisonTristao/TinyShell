@@ -309,7 +309,8 @@ string TinyShell::validate_command(const ParsedCommand& cmd, uint8_t& error_code
 
     if (!check_expected_types(cmd.module_name, cmd.command_name, cmd.args_count)) {
         error_code = RESULT_ERROR;
-        return get_expected_types(cmd.module_name, cmd.command_name);
+        return "Falha ao converter os tipos, a funcao espera => " +
+               get_expected_types(cmd.module_name, cmd.command_name) + "\n";
     }
 
     return "";
