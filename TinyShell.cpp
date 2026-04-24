@@ -1,5 +1,8 @@
 #include <TinyShell.h>
 
+#include <algorithm>
+#include <cctype>
+
 namespace {
 
 string format_shell_response(uint8_t code, const string& verbose_text) {
@@ -12,6 +15,30 @@ string format_shell_response(uint8_t code, const string& verbose_text) {
 #else
     return verbose_text;
 #endif
+}
+
+string trim_copy(const string& text) {
+    const auto first = find_if_not(text.begin(), text.end(), [](unsigned char ch) {
+        return isspace(ch) != 0;
+    });
+
+    if (first == text.end()) {
+        return "";
+    }
+
+    const auto last = find_if_not(text.rbegin(), text.rend(), [](unsigned char ch) {
+        return isspace(ch) != 0;
+    }).base();
+
+    return string(first, last);
+}
+
+bool starts_with(const string& text, const string& prefix) {
+    if (prefix.length() > text.length()) {
+        return false;
+    }
+
+    return equal(prefix.begin(), prefix.end(), text.begin());
 }
 
 } // namespace
@@ -65,6 +92,96 @@ string TinyShell::run_line_command(string command) {
 
     // return the result of the command execution
     return format_shell_response(status_code, result_text);
+}
+
+vector<string> TinyShell::complete_line(const string& partial_command, size_t max_results) {
+    vector<string> completions;
+    if (max_results == 0) {
+        return completions;
+    }
+
+    const auto push_completion = [&](const string& candidate) {
+        if (candidate.empty()) {
+            return;
+        }
+
+        const bool already_added = find(completions.begin(), completions.end(), candidate) != completions.end();
+        if (!already_added && completions.size() < max_results) {
+            completions.push_back(candidate);
+        }
+    };
+
+    const auto complete_modules = [&](const string& module_prefix) {
+        const size_t module_total = table_linker.module_count();
+        for (size_t i = 0; i < module_total && completions.size() < max_results; ++i) {
+            const string module_name = table_linker.module_name_at(i);
+            if (module_name.empty()) {
+                continue;
+            }
+
+            if (starts_with(module_name, module_prefix)) {
+                push_completion(module_name + " ");
+            }
+        }
+    };
+
+    const auto complete_commands = [&](const string& module_name, const string& command_prefix) {
+        const size_t command_total = table_linker.function_count(module_name);
+        for (size_t i = 0; i < command_total && completions.size() < max_results; ++i) {
+            const string command_name = table_linker.function_name_at(module_name, i);
+            if (command_name.empty()) {
+                continue;
+            }
+
+            if (starts_with(command_name, command_prefix)) {
+                push_completion(module_name + " -" + command_name + " ");
+            }
+        }
+    };
+
+    const string input = trim_copy(partial_command);
+    if (input.empty()) {
+        complete_modules("");
+        return completions;
+    }
+
+    const size_t first_space = input.find(' ');
+    if (first_space == string::npos) {
+        complete_modules(input);
+        return completions;
+    }
+
+    const string module_part = trim_copy(input.substr(0, first_space));
+    const string rest = trim_copy(input.substr(first_space + 1));
+
+    if (module_part.empty()) {
+        complete_modules("");
+        return completions;
+    }
+
+    if (!check_module_name(module_part)) {
+        complete_modules(module_part);
+        return completions;
+    }
+
+    if (rest.empty()) {
+        complete_commands(module_part, "");
+        return completions;
+    }
+
+    if (rest[0] != '-') {
+        complete_commands(module_part, rest);
+        return completions;
+    }
+
+    const size_t command_end = rest.find(' ', 1);
+    if (command_end != string::npos) {
+        return completions;
+    }
+
+    const string command_part = rest.substr(1);
+    complete_commands(module_part, command_part);
+    return completions;
 }
 
 size_t count_commas(const string& s) {

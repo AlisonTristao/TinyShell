@@ -220,6 +220,36 @@ string TableLinker::get_all() {
     return text.empty() ? "no modules available.\n" : text;
 }
 
+size_t TableLinker::module_count() const {
+    return size;
+}
+
+string TableLinker::module_name_at(size_t idx) const {
+    if (idx >= size) {
+        return "";
+    }
+
+    return module_name[idx];
+}
+
+size_t TableLinker::function_count(string module_name) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) {
+        return 0;
+    }
+
+    return commands_array[mod_idx].count();
+}
+
+string TableLinker::function_name_at(string module_name, size_t idx) {
+    size_t mod_idx = select_module(module_name);
+    if (check_index(mod_idx)) {
+        return "";
+    }
+
+    return commands_array[mod_idx].get_name(idx);
+}
+
 uint8_t TableLinker::call(string module_name, string func_name) {
     size_t mod_idx = select_module(module_name);
     if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found

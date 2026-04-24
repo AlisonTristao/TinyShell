@@ -123,6 +123,8 @@ class function_manager {
         function_manager(size_t size);
         ~function_manager();
 
+        size_t count() const { return size; }
+
         // clone
         function_manager(const function_manager& other);
         function_manager& operator=(const function_manager& other);
@@ -190,6 +192,10 @@ class TableLinker {
         uint8_t create_module(string mod_name, string mod_description);
         string get_all_module(string name);
         string get_expected_types_str(string module_name, string func_name);
+        size_t module_count() const;
+        string module_name_at(size_t idx) const;
+        size_t function_count(string module_name);
+        string function_name_at(string module_name, size_t idx);
 
         // checks
         bool check_module_name(string name);
