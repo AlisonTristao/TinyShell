@@ -1,5 +1,15 @@
 # TinyShell
 
+## Version
+
+Current version: **0.2.0+autocomplete**
+
+### What's New in 0.2.0+autocomplete
+
+- Added completion API: `TinyShell::complete_line(partial_command, max_results)`.
+- Added module/command enumeration helpers in `TableLinker` used by completion logic.
+- Improved shell integration support for command auto-complete flows.
+
 
 ### How the Library Works
 
