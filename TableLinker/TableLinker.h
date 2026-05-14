@@ -28,29 +28,13 @@ using namespace std;
 // abstract class to create the generics
 class base_function {
     public:
-        base_function() : param_types(nullptr), size(0) {}   // <--- Faltava isso
-        virtual ~base_function() { delete[] param_types; }
-        
-        base_function(const base_function& other) : name(other.name), description(other.description), size(other.size) {
-            if (other.param_types && size) {
-                param_types = new const char*[size];
-                for (size_t i = 0; i < size; ++i) param_types[i] = other.param_types[i];
-            } else {
-                param_types = nullptr;
-            }
-        }
-
+        base_function() : param_types(nullptr), size(0) {}
+        virtual ~base_function() {clear_data();}
+        base_function(const base_function& other) {copy_data(other);}
         base_function& operator=(const base_function& other) {
-            if (this == &other) return *this;
-            delete[] param_types;
-            size = other.size;
-            name = other.name;
-            description = other.description;
-            if (other.param_types && size) {
-                param_types = new const char*[size];
-                for (size_t i = 0; i < size; ++i) param_types[i] = other.param_types[i];
-            } else {
-                param_types = nullptr;
+            if (this != &other) { 
+                clear_data();    
+                copy_data(other); 
             }
             return *this;
         }
@@ -62,6 +46,39 @@ class base_function {
         string get_name() { return name; }
         string get_description() { return description; }
     protected:
+        // copy and clear functions to manage dynamic memory for param_types
+        void copy_data(const base_function& other) {
+            // Copy basic data
+            this->size = other.size;
+            this->name = other.name;
+            this->description = other.description;
+
+            // Deep copy of param_types
+            if (other.param_types && size > 0) {
+                this->param_types = new const char*[size];
+                for (size_t i = 0; i < size; ++i) {
+                    if (other.param_types[i]) {
+                        char* new_str = new char[std::strlen(other.param_types[i]) + 1];
+                        std::strcpy(new_str, other.param_types[i]);
+                        this->param_types[i] = new_str;
+                    } else {
+                        this->param_types[i] = nullptr;
+                    }
+                }
+            } else {
+                this->param_types = nullptr;
+            }
+        }
+
+        void clear_data() {
+            if (param_types) {
+                for (size_t i = 0; i < size; ++i)
+                    delete[] param_types[i]; 
+                delete[] param_types;
+                param_types = nullptr;
+            }
+        }
+
         const char** param_types = nullptr;
         string name;
         string description;
