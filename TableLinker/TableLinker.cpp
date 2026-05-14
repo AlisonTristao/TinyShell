@@ -140,7 +140,7 @@ uint8_t function_manager::call(size_t idx) {
 
 uint8_t function_manager::call(string name, void** args) {
     size_t idx = select(name);
-    if (check_index(idx)) return MODULE_NOT_FOUND;
+    if (check_index(idx)) return FUNCTION_NOT_FOUND;
     return call(idx, args);
 }
 
