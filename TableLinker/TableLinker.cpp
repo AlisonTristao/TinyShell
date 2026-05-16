@@ -111,7 +111,7 @@ string function_manager::get_expected_types_str(size_t idx) {
 }
 
 string function_manager::get_all() {
-    string text = "";
+    string text = "\n";
     for (size_t i = 0; i < size; i++)
         text += "-" + func_array[i]->get_name() + " " + get_expected_types_str(i) + " => " + func_array[i]->get_description() + "\n";
     return text.empty() ? "no functions available.\n" : text;
