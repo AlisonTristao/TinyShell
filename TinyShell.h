@@ -41,18 +41,17 @@ class TinyShell {
         /** 
          * @brief initialize the shell, put the helper command in the help module
          */
-        template<typename F>
-        void begin(F&& callback) {
-            // convert the F to the internal OutCallback automatically
-            output_callback = function<void(const string&)>(forward<F>(callback));
-
+        
+        void begin() {
             create_module("help", "Help module for listing available commands");
             add(function<uint8_t()>([this]() { return this->wrapper_help(); }), "modules", "Description", "help");
             add(function<uint8_t()>([this]() { return this->wrapper_help_types(); }), "types", "Description", "help");    
         }
-
-        void set_output_callback(function<void(const string&)> callback) {
-            output_callback = callback;
+    
+        template<typename F>
+        void set_output_callback(F&& callback) {
+            // convert the F to the internal OutCallback automatically
+            output_callback = function<void(const string&)>(forward<F>(callback));
         }
 
         /**
