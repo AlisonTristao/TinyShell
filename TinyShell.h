@@ -33,9 +33,6 @@ using namespace std;
  */
 class TinyShell {
     public:   
-        using OutCallback = function<void(const string&)>;
-        using help = function<uint8_t(const string&)>;
-
         /**
          * @brief Default constructor for TinyShell.
          */
@@ -44,15 +41,17 @@ class TinyShell {
         /** 
          * @brief initialize the shell, put the helper command in the help module
          */
-        void begin(OutCallback callback) {
-            output_callback = callback;
+        template<typename F>
+        void begin(F&& callback) {
+            // Converte o F para o seu OutCallback interno automaticamente
+            output_callback = function<void(const string&)>(forward<F>(callback));
             create_module("help", "Help module for listing available commands");
             add(help_callback, "help", "Print this help message", "help");
             add(type_callback, "types", "Print all available types", "help");
             add(form_callback, "format", "Print the command format", "help");
         }
 
-        void set_output_callback(OutCallback callback) {
+        void set_output_callback(function<void(const string&)> callback) {
             output_callback = callback;
         }
 
@@ -99,20 +98,6 @@ class TinyShell {
         uint8_t create_module(string mod_name, string mod_description);
     private:
         TableLinker table_linker;
-        OutCallback output_callback = [this](const string& output) { (void) output; /* no-op */ };
-        help help_callback = [this](const string& module_name) { 
-            output_callback(get_help(module_name));
-            return RESULT_OK; 
-        };
-        help type_callback = [this](const string& none) { 
-            output_callback(get_types());
-            return RESULT_OK; 
-        };
-        help form_callback = [this](const string& none) { 
-            output_callback("module -command arg0, arg1, arg2, ... argN \n to use commas in arguments, escape them with a backslash (\\,)\n");
-            return RESULT_OK; 
-        };
-
         struct ParsedCommand {
             string module_name;
             string command_name;
@@ -191,6 +176,21 @@ class TinyShell {
          * @return Result of the function call.
          */
         uint8_t call(string module_name, string func_name, void** args = nullptr);
+
+        // lamdas to creates generic callbacks for the help command
+        function<void(const string&)> output_callback = [this](const string& output) { (void) output; /* no-op */ };
+        function<uint8_t(const string&)> help_callback = [this](const string& module_name) { 
+            output_callback(get_help(module_name));
+            return RESULT_OK; 
+        };
+        function<uint8_t(const string&)> type_callback = [this](const string& none) { 
+            output_callback(get_types());
+            return RESULT_OK; 
+        };
+        function<uint8_t(const string&)> form_callback = [this](const string& none) { 
+            output_callback("module -command arg0, arg1, arg2, ... argN \n to use commas in arguments, escape them with a backslash (\\,)\n");
+            return RESULT_OK; 
+        };
     };
 
 #endif
