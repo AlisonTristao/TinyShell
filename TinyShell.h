@@ -32,25 +32,36 @@ using namespace std;
  * @brief TinyShell class provides a shell-like interface for managing modules and commands.
  */
 class TinyShell {
-    public:
+    public:   
+        using OutCallback = function<void(const string&)>;
+        using help = function<uint8_t(const string&)>;
+
         /**
          * @brief Default constructor for TinyShell.
          */
         TinyShell() {}
 
-        /**
-         * @brief Retrieve module information.
-         * @param module_name: name of the module to get help, if empty return all modules
-         * @return return all items inside the module
+        /** 
+         * @brief initialize the shell, put the helper command in the help module
          */
-        string get_help(string module_name = "");
+        void begin(OutCallback callback) {
+            output_callback = callback;
+            create_module("help", "Help module for listing available commands");
+            add(help_callback, "help", "Print this help message", "help");
+            add(type_callback, "types", "Print all available types", "help");
+            add(form_callback, "format", "Print the command format", "help");
+        }
+
+        void set_output_callback(OutCallback callback) {
+            output_callback = callback;
+        }
 
         /**
          * @brief run a command line
          * @param command: the command line to run
          * @return return the result of the function
          */
-        string run_command_line(string command);
+        uint8_t run_command_line(string command);
 
         /**
          * @brief Returns line-completion candidates for a partial shell input.
@@ -74,7 +85,7 @@ class TinyShell {
          * @return return the result of the function
          */
         template<typename... param>
-        uint8_t add(uint8_t(*func)(param...), string name, string description, string module_name) {
+        uint8_t add(function<uint8_t(param...)> func, string name, string description, string module_name) {
             return table_linker.add_func_to_module(module_name, func, name, description);
         }
 
@@ -87,12 +98,33 @@ class TinyShell {
         uint8_t create_module(string mod_name, string mod_description);
     private:
         TableLinker table_linker;
+        OutCallback output_callback = [this](const string& output) { (void) output; /* no-op */ };
+        help help_callback = [this](const string& module_name) { 
+            output_callback(get_help(module_name));
+            return RESULT_OK; 
+        };
+        help type_callback = [this](const string& none) { 
+            output_callback(get_types());
+            return RESULT_OK; 
+        };
+        help form_callback = [this](const string& none) { 
+            output_callback("module -command arg0, arg1, arg2, ... argN \n to use commas in arguments, escape them with a backslash (\\,)\n");
+            return RESULT_OK; 
+        };
+
         struct ParsedCommand {
             string module_name;
             string command_name;
             string args_str;
             size_t args_count;
         };
+
+        /**
+         * @brief Retrieve module information.
+         * @param module_name: name of the module to get help, if empty return all modules
+         * @return return all items inside the module
+         */
+        string get_help(string module_name = "");
 
         /**
          * @brief Parses a command string into its components.

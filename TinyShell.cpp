@@ -43,15 +43,17 @@ bool starts_with(const string& text, const string& prefix) {
 
 } // namespace
 
-string TinyShell::run_command_line(string command) {
+uint8_t TinyShell::run_command_line(string command) {
     // remove leading and trailing whitespace
     ParsedCommand cmd = parse_command(command);
     uint8_t status_code = RESULT_OK;
 
     // verify if the command is valid
     string validation_text = validate_command(cmd, status_code);
-    if (status_code != RESULT_OK)
-        return format_shell_response(status_code, validation_text);
+    if (status_code != RESULT_OK) {
+        output_callback(format_shell_response(status_code, validation_text));
+        return status_code;
+    }
 
     const char** types = table_linker.get_param_types(cmd.module_name, cmd.command_name);
     string result_text;
@@ -91,7 +93,8 @@ string TinyShell::run_command_line(string command) {
     delete[] args;
 
     // return the result of the command execution
-    return format_shell_response(status_code, result_text);
+    output_callback(format_shell_response(status_code, result_text));
+    return status_code;
 }
 
 vector<string> TinyShell::complete_line(const string& partial_command, size_t max_results) {

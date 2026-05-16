@@ -330,4 +330,20 @@ inline void destroy_type_char(void* ptr, const char* type_code) {
     (void)TinyShellUserConverters::destroy_type_custom(ptr, type_code);
 }
 
+inline string get_types() {
+    return "\n"
+           "Type aliases used by shell:    \n"
+           "u8  => uint8_t                 \n"
+           "u16 => uint16_t                \n"
+           "u32 => uint32_t                \n"
+           "u64 => uint64_t                \n"
+           "i8  => int8_t                  \n"
+           "i16 => int16_t                 \n"
+           "i32 => int32_t                 \n"
+           "i64 => int64_t                 \n"
+           "f32 => float                   \n"
+           "f64 => double                  \n"
+           "b   => bool                    \n"
+           "str => string                  \n";
+}
 #endif // TYPE_CONVERSION_H

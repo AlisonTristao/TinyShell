@@ -1,4 +1,17 @@
 {
   "name": "TinyShell",
-  "version": "0.2.0+autocomplete"
+  "version": "0.3.0 output_callback",
+  "description": "A tiny shell for embedded systems, with a simple command structure and a help module.",
+  "main": "TinyShell.cpp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlisonTristao/TinyShell.git"
+  },
+  "keywords": [
+    "shell",
+    "embedded",
+    "command",
+    "help"
+  ],
+  "author": "Alison Tristao"
 }

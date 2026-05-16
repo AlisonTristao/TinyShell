@@ -162,7 +162,7 @@ class function_manager {
         uint8_t call(string name, void** args = nullptr);
 
         template<typename... param>
-        uint8_t add(uint8_t(*func)(param...), string name, string description) {
+        uint8_t add(function<uint8_t(param...)> func, string name, string description) {
             return add(size, func, name, description);
         }
 
@@ -180,7 +180,7 @@ class function_manager {
         uint8_t call(size_t idx);
 
         template<typename... param>
-        uint8_t add(size_t idx, uint8_t(*func)(param...), string name, string description) {
+        uint8_t add(size_t idx, function<uint8_t(param...)> func, string name, string description) {
             // resize the array if necessary
             if (idx == size) resize(size + 1);
 
@@ -225,7 +225,7 @@ class TableLinker {
         uint8_t call(string module_name, string func_name, void** args);
 
         template<typename... param>
-        uint8_t add_func_to_module(string name, uint8_t(*func)(param...), string func_name, string func_description) {
+        uint8_t add_func_to_module(string name, function<uint8_t(param...)> func, string func_name, string func_description) {
             size_t mod_idx = select_module(name);
             if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
             return commands_array[mod_idx].add(func, func_name, func_description);
@@ -244,7 +244,7 @@ class TableLinker {
         uint8_t create_module(size_t idx, string mod_name, string mod_description);
 
         template<typename... param>
-        uint8_t add_func_to_module(size_t mod_idx, uint8_t(*func)(param...), string func_name, string func_description) {
+        uint8_t add_func_to_module(size_t mod_idx, function<uint8_t(param...)> func, string func_name, string func_description) {
             return commands_array[mod_idx].add(func, func_name, func_description);
         }
 };
