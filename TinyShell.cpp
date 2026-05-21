@@ -69,9 +69,9 @@ uint8_t TinyShell::run_command_line(string command) {
             status_code = call(cmd.module_name, cmd.command_name, args);
 
             if (status_code != RESULT_OK) {
-                result_text = "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' falhou com código de erro: " + to_string(status_code) + ".\n";
+                result_text = "Comando '" + cmd.command_name + "' do modulo '" + cmd.module_name + "' falhou com codigo de erro: " + to_string(status_code) + ".\n";
             } else {
-                result_text = "Comando '" + cmd.command_name + "' do módulo '" + cmd.module_name + "' executado com sucesso.\n";
+                result_text = "Comando '" + cmd.command_name + "' do modulo '" + cmd.module_name + "' executado com sucesso.\n";
             }
         } catch (const exception& e) {
             status_code = RESULT_ERROR;
