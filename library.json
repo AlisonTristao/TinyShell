@@ -1,6 +1,6 @@
 {
   "name": "TinyShell",
-  "version": "0.3.0 output_callback",
+  "version": "1.0.0 first release",
   "description": "A tiny shell for embedded systems, with a simple command structure and a help module.",
   "main": "TinyShell.cpp",
   "repository": {
