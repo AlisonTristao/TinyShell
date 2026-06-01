@@ -97,7 +97,7 @@ class class_function : public base_function {
 
             // Convert each parameter type to a single identifying character
             size_t i = 0;
-            auto dup_type_code = [](const char* code) -> const char* {
+            [[maybe_unused]] auto dup_type_code = [](const char* code) -> const char* {
                 if (code == nullptr) return nullptr;
                 size_t len = std::strlen(code);
                 char* out = new char[len + 1];
