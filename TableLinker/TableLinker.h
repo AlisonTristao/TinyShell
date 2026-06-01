@@ -89,15 +89,23 @@ class base_function {
 template<typename... param>
 class class_function : public base_function {
     public:
-        class_function(std::function<uint8_t(param...)> func_ptr, std::string func_name, std::string func_description) 
-            : func(std::move(func_ptr)), name(std::move(func_name)), description(std::move(func_description)) {
-            
+        class_function(function<uint8_t(param...)> func_ptr, string func_name, string func_description) : func(func_ptr) {
             size = sizeof...(param);
-            param_types.reserve(size);
-            
-            if constexpr (sizeof...(param) > 0) {
-                (..., param_types.push_back( type_code<std::decay_t<param>>() ? type_code<std::decay_t<param>>() : "" ));
-            }
+            param_types = new const char*[size];
+            name = func_name;
+            description = func_description;
+
+            // Convert each parameter type to a single identifying character
+            size_t i = 0;
+            auto dup_type_code = [](const char* code) -> const char* {
+                if (code == nullptr) return nullptr;
+                size_t len = std::strlen(code);
+                char* out = new char[len + 1];
+                std::strcpy(out, code);
+                return out;
+            };
+            using expander = int[];
+            (void)expander{0, ((param_types[i++] = dup_type_code(type_code<typename decay<param>::type>())), 0)...};
         }
         unique_ptr<base_function> clone() const override {
             return make_unique<class_function>(*this);
