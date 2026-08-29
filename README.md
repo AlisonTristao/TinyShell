@@ -2,7 +2,21 @@
 
 ## Version
 
-Current version: **0.2.0+autocomplete**
+Current version: **1.1.0**
+
+### What's New in 1.1.0
+
+- Added `ShellLineEditor` (`ShellLineEditor.h` / `.cpp`): a portable, framework-free
+  server-side line editor for an interactive shell reached over an opaque byte stream
+  (a UART console, or a BTP `TERMINAL_IN` / `TERMINAL_OUT` channel). It handles echo,
+  both backspace variants, in-line cursor movement, circular history (`ESC[A` / `ESC[B`),
+  Ctrl+R reverse search, Tab completion through an external provider, and a scroll window
+  for long lines. Input arrives via `feed()` / `poll()`; everything it would echo is
+  appended to a caller-owned `std::string` instead of being written to a `Stream`.
+  Pair its `CompletionProvider` with `TinyShell::complete_line`. No dependency on the
+  `TinyShell` class itself.
+- Smoke test: `test/test_shell_line_editor.cpp`
+  (`g++ -std=gnu++17 -I. ShellLineEditor.cpp test/test_shell_line_editor.cpp && ./a.out`).
 
 ### What's New in 0.2.0+autocomplete
 
