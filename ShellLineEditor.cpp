@@ -1,10 +1,13 @@
 #include "ShellLineEditor.h"
 
-// Portable C++ port of bally_dongle's old lib/ShellSerial. The line-editing
-// logic below is that file's, unchanged in behaviour; only the I/O shape
-// differs -- input arrives through feed()/poll() instead of Arduino
-// Stream::available()/read(), and every echoed byte goes to emit() (a
-// caller-owned std::string) instead of Stream::print().
+// The wire protocol this speaks, both directions, is a plain VT100 subset:
+//   in   printable bytes; DEL(0x7f)/BS(0x08) erase; CR or LF submits the
+//        line; TAB completes; Ctrl+R (0x12) reverse-searches; ESC [ A/B/C/D
+//        are up/down/left/right.
+//   out  the typed characters echoed back; "\b \b" for an erase; a '\r' plus
+//        a reprint of the line for a full redraw (history recall, wrap).
+// No other CSI sequences are emitted, so the far terminal only needs to
+// understand '\r', '\b' and overwrite-at-cursor.
 
 namespace {
 
@@ -67,14 +70,15 @@ void ShellLineEditor::emit(const std::string& s) {
 }
 
 void ShellLineEditor::feed(const std::uint8_t* data, std::size_t len) {
-    if (data == nullptr || len == 0) {
+    if (data == nullptr || len == 0 || pendingInput_.size() >= MAX_PENDING_INPUT) {
         return;
     }
-    pendingInput_.append(reinterpret_cast<const char*>(data), len);
+    const std::size_t room = MAX_PENDING_INPUT - pendingInput_.size();
+    pendingInput_.append(reinterpret_cast<const char*>(data), (len < room) ? len : room);
 }
 
 void ShellLineEditor::feed(const std::string& data) {
-    pendingInput_.append(data);
+    feed(reinterpret_cast<const std::uint8_t*>(data.data()), data.size());
 }
 
 bool ShellLineEditor::poll(std::string& out, std::string* outLine) {
@@ -122,8 +126,8 @@ void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
 
     if (!text.empty()) {
         // Normalise every line ending to CR+LF so each line returns to
-        // column 0 on a real terminal. ShellSerial's own command output
-        // never carried a lone '\n', but a robot's shell response does.
+        // column 0 on a real terminal (command output routinely carries a
+        // lone '\n').
         for (std::size_t i = 0; i < text.size(); ++i) {
             const char c = text[i];
             if (c == '\r') {
@@ -511,6 +515,10 @@ void ShellLineEditor::onTab() {
         tabSeedInput_ = inputBuffer_;
         tabSuggestionCount_ =
             completionProvider_(tabSeedInput_, tabSuggestions_, MAX_TAB_SUGGESTIONS);
+        // Trust the count no further than the buffer it was allowed to fill.
+        if (tabSuggestionCount_ > MAX_TAB_SUGGESTIONS) {
+            tabSuggestionCount_ = MAX_TAB_SUGGESTIONS;
+        }
         tabSuggestionIndex_ = 0;
 
         if (tabSuggestionCount_ == 0) {

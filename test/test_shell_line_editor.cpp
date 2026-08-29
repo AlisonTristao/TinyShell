@@ -1,7 +1,5 @@
-// Standalone smoke test for ShellLineEditor. The TinyShell repo has no test
-// framework of its own; the firmware repos that consume this library
-// (bally_dongle, bally_OS) exercise it under PlatformIO + Unity. This file is
-// a quick local check. To run it:
+// Standalone smoke test for ShellLineEditor -- plain asserts, no framework.
+// To run it:
 //   g++ -std=gnu++17 -I. -Wall -Wextra ShellLineEditor.cpp test/test_shell_line_editor.cpp -o sle
 //   ./sle
 
@@ -159,6 +157,32 @@ void test_reverse_search() {
     assert(vis(out).find("sensor -imu_status") != std::string::npos);
 }
 
+void test_long_line_scrolls_and_still_completes() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+
+    std::string cmd(200, 'x');  // far wider than the render window
+    ed.feed(cmd + "\r");
+    std::string l;
+    assert(ed.poll(out, &l));
+    assert(l == cmd);  // every byte survived the scroll-window redraws
+}
+
+void test_feed_backlog_is_capped_not_unbounded() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+
+    // Flood far past MAX_PENDING_INPUT (4096) with no CR, then poll.
+    ed.feed(std::string(20000, 'a'));
+    std::string l;
+    assert(!ed.poll(out, &l));           // no line completed
+    ed.feed(std::string("\r"));
+    assert(ed.poll(out, &l));
+    assert(l.size() <= 512);             // clamped to MAX_INPUT_LENGTH, not 20000
+}
+
 }  // namespace
 
 int main() {
@@ -170,6 +194,8 @@ int main() {
     test_multi_line_feed_drains_by_looping_poll();
     test_unclosed_quote_continues_line();
     test_reverse_search();
+    test_long_line_scrolls_and_still_completes();
+    test_feed_backlog_is_capped_not_unbounded();
     std::printf("ShellLineEditor: all smoke tests passed\n");
     return 0;
 }

@@ -9,17 +9,29 @@
 
 /**
  * @brief Server-side line editor for an interactive shell reached over an
- * opaque byte stream -- a UART console, or a BTP TERMINAL_IN / TERMINAL_OUT
- * channel.
+ * opaque, bidirectional byte stream.
  *
- * Portable C++ port of bally_dongle's old lib/ShellSerial: identical
- * line-editing behaviour (echo, both backspace variants, in-line cursor
- * movement, circular history via ESC[A / ESC[B, Ctrl+R reverse search, Tab
- * completion through an external provider, a scroll window for long lines),
- * but it reads its input from feed()/poll() instead of an Arduino Stream and
- * writes every byte it would have echoed into a caller-owned std::string
- * instead of Stream::print(). No Arduino, no FreeRTOS -- links and unit-tests
- * on the host.
+ * It gives a remote terminal the editing a local one gets from its TTY
+ * driver -- character echo, both backspace variants, in-line cursor movement
+ * (left/right arrows), a circular command history (up/down arrows), Ctrl+R
+ * reverse search, Tab completion through a caller-supplied provider, and a
+ * horizontal scroll window for lines longer than the render width -- without
+ * the terminal itself doing any of it. The terminal stays a "dumb" device:
+ * it forwards raw keystrokes in and prints raw bytes out.
+ *
+ * That makes it a natural companion to TinyShell over a transport that only
+ * moves bytes (a UART, a socket, a framed radio/USB channel): feed the bytes
+ * the terminal sent, poll() out finished command lines to hand to
+ * TinyShell::run_command_line(), and send back everything the editor echoed.
+ *
+ * It is framework-free -- only <string>/<vector>/<functional> -- so it links
+ * and unit-tests on a host, and it has no dependency on the TinyShell class
+ * (Tab completion is a std::function you provide, e.g. one backed by
+ * TinyShell::complete_line).
+ *
+ * NOT thread-safe: drive one instance from a single thread/task. Everything
+ * it would echo is appended to a std::string you own, so no Stream, no
+ * blocking, no I/O of its own.
  *
  * Usage:
  *   ShellLineEditor ed;
@@ -29,7 +41,7 @@
  *   ed.feed(rxBytes, n);                // buffer raw terminal input
  *   std::string line;
  *   while (ed.poll(out, &line)) {       // drain it; `out` gets echo/redraws
- *       runCommand(line);
+ *       run_command_line(line);
  *   }
  *   ed.writeResponse(commandOutput, out);
  *   sendToTerminal(out);                // whatever `out` accumulated
@@ -51,7 +63,9 @@ public:
 
     /**
      * @brief Buffer raw terminal input bytes for poll() to process. Never
-     * echoes anything on its own.
+     * echoes anything on its own. Bytes past MAX_PENDING_INPUT of unprocessed
+     * backlog are dropped (a terminal that floods faster than poll() drains
+     * is pathological); call poll() promptly after feed().
      */
     void feed(const std::uint8_t* data, std::size_t len);
     void feed(const std::string& data);
@@ -97,7 +111,7 @@ public:
 
     void setCompletionProvider(CompletionProvider provider);
 
-    // Introspection -- kept from ShellSerial, handy for tests/tools.
+    // Introspection, handy for tests and for a "show history" command.
     std::size_t historyCount() const;
     bool historyAt(std::size_t index, std::string& outMessage) const;
 
@@ -105,15 +119,19 @@ private:
     // Defensive ceiling for the per-instance history ring; the real size is
     // the constructor's historyCapacity clamped to this.
     static constexpr std::size_t MAX_HISTORY_STORAGE = 128;
+    // Longest editable line, in bytes (a UTF-8 line is measured in bytes).
     static constexpr std::size_t MAX_INPUT_LENGTH = 512;
+    // Render width in columns; a longer line scrolls horizontally.
     static constexpr std::size_t MAX_RENDER_COLUMNS = 72;
     static constexpr std::size_t MAX_TAB_SUGGESTIONS = 24;
+    // Cap on unprocessed feed() backlog; excess is dropped.
+    static constexpr std::size_t MAX_PENDING_INPUT = 4096;
 
     enum class EscState : std::uint8_t { None, Esc, Bracket };
 
-    // Output sink for the current public call. Set on entry, cleared on exit;
-    // every private helper appends through emit() instead of ShellSerial's
-    // `serial_->print`.
+    // Output sink for the current public call: set on entry, cleared on exit.
+    // Every private helper appends echo/redraw bytes through emit() rather
+    // than doing any I/O of its own.
     std::string* sink_ = nullptr;
     void emit(char c);
     void emit(const char* s);
