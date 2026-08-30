@@ -121,40 +121,67 @@ void ShellLineEditor::refreshLine(std::string& out) {
     sink_ = nullptr;
 }
 
+// Append `text` to the current sink with CR+LF normalisation: a lone '\n'
+// becomes "\r\n", an existing "\r\n" is preserved, a lone '\r' is left as a
+// bare carriage return (ShellOutput::renderResponse emits one per line, "\r" +
+// prefix + text + "\r\n" -- turning it into "\r\n" would inject a blank line),
+// and a closing "\r\n" is added when `text` does not already end on a line
+// break. Caller must have set sink_.
+void ShellLineEditor::emitResponseBody(const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\r') {
+            if (i + 1 < text.size() && text[i + 1] == '\n') {
+                continue;  // emitted on the '\n' below
+            }
+            emit('\r');
+        } else if (c == '\n') {
+            emit("\r\n");
+        } else {
+            emit(c);
+        }
+    }
+    const char last = text.back();
+    if (last != '\n' && last != '\r') {
+        emit("\r\n");
+    }
+}
+
 void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
     sink_ = &out;
 
-    if (!text.empty()) {
-        // Normalise line endings to CR+LF so each line returns to column 0 on
-        // a real terminal (command output routinely carries a lone '\n'). A
-        // lone '\r' is left as-is: it is a carriage return, not a line break
-        // -- turning it into "\r\n" injects a blank line ahead of any text a
-        // caller places after a bare '\r' (ShellOutput::renderResponse emits
-        // one per line, "\r" + prefix + text + "\r\n").
-        for (std::size_t i = 0; i < text.size(); ++i) {
-            const char c = text[i];
-            if (c == '\r') {
-                if (i + 1 < text.size() && text[i + 1] == '\n') {
-                    continue;  // emitted on the '\n' below
-                }
-                emit('\r');
-            } else if (c == '\n') {
-                emit("\r\n");
-            } else {
-                emit(c);
-            }
-        }
-        const char last = text.back();
-        if (last != '\n' && last != '\r') {
-            emit("\r\n");
-        }
-    }
+    emitResponseBody(text);
 
     // The response left the cursor at column 0 of a fresh line; there is
     // nothing on this line to overwrite when the prompt is repainted.
     renderedLength_ = 0;
     redrawInput();
 
+    sink_ = nullptr;
+}
+
+void ShellLineEditor::writeAsyncOutput(const std::string& text, std::string& out) {
+    if (text.empty()) {
+        return;
+    }
+    sink_ = &out;
+
+    // Move off the prompt/input line so the text starts on its own line -- but
+    // only on the first call of a burst. A run of these then sees
+    // renderedLength_ == 0 (left that way below) and stacks with no gap.
+    if (renderedLength_ > 0) {
+        emit("\r\n");
+        renderedLength_ = 0;
+    }
+
+    emitResponseBody(text);
+
+    // Cursor sits at column 0 of a fresh line; the prompt is deliberately NOT
+    // repainted here (see the header doc) so consecutive bursts do not put a
+    // prompt between every line. Call refreshLine() once the burst pauses.
     sink_ = nullptr;
 }
 

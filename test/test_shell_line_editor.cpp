@@ -127,6 +127,36 @@ void test_write_response_keeps_lone_cr_as_carriage_return() {
     assert(out == "\r< done\r\n\r$ \r$ ");
 }
 
+void test_write_async_output_breaks_off_prompt_then_stacks() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+    ed.feed(std::string("ab"));
+    ed.poll(out, nullptr);  // prompt + "ab" now on screen
+
+    // First async line: breaks off the "$ ab" line, prints the text, and
+    // leaves the cursor at column 0 -- the prompt is NOT repainted.
+    out.clear();
+    ed.writeAsyncOutput("tick 1", out);
+    assert(out == "\r\ntick 1\r\n");
+
+    // Second line in the same burst: no further break, it just stacks.
+    out.clear();
+    ed.writeAsyncOutput("tick 2", out);
+    assert(out == "tick 2\r\n");
+
+    // The burst pauses: refreshLine() brings the "$ ab" edit line back intact.
+    out.clear();
+    ed.refreshLine(out);
+    assert(vis(out).find("$ ab") != std::string::npos);
+
+    // The in-progress input survived -- CR still completes "ab".
+    ed.feed(std::string("\r"));
+    std::string l;
+    assert(ed.poll(out, &l));
+    assert(l == "ab");
+}
+
 void test_multi_line_feed_drains_by_looping_poll() {
     ShellLineEditor ed(4);
     std::string out;
@@ -205,6 +235,7 @@ int main() {
     test_backspace_fast_path();
     test_write_response_normalises_newlines();
     test_write_response_keeps_lone_cr_as_carriage_return();
+    test_write_async_output_breaks_off_prompt_then_stacks();
     test_multi_line_feed_drains_by_looping_poll();
     test_unclosed_quote_continues_line();
     test_reverse_search();

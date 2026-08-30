@@ -104,6 +104,19 @@ public:
     void writeResponse(const std::string& text, std::string& out);
 
     /**
+     * @brief Emit @p text as output that arrived asynchronously while the user
+     * sits at the prompt -- an unsolicited log line, a background task's
+     * periodic result.
+     *
+     * Breaks off the current prompt/input line if one is on screen, applies the
+     * same CR+LF normalisation as writeResponse(), and leaves the cursor at
+     * column 0 of a fresh line WITHOUT repainting the prompt -- so a run of
+     * these stacks cleanly with no prompt between the lines. Call refreshLine()
+     * once the burst pauses to bring the edit line back.
+     */
+    void writeAsyncOutput(const std::string& text, std::string& out);
+
+    /**
      * @brief Seed arrow-up history without echoing anything (e.g. replaying
      * persisted history at boot).
      */
@@ -136,6 +149,9 @@ private:
     void emit(char c);
     void emit(const char* s);
     void emit(const std::string& s);
+    // Shared body of writeResponse()/writeAsyncOutput(): CR+LF-normalised
+    // append of `text` to sink_, with a closing "\r\n" when it lacks one.
+    void emitResponseBody(const std::string& text);
 
     std::string pendingInput_;  // raw bytes fed but not yet processed by poll()
 
