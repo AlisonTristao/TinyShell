@@ -114,6 +114,19 @@ void test_write_response_normalises_newlines() {
     assert(out == "line1\r\nline2\r\n\r$ \r$ ");
 }
 
+void test_write_response_keeps_lone_cr_as_carriage_return() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+
+    // ShellOutput::renderResponse() builds each line as "\r" + prefix + text
+    // + "\r\n". The leading lone '\r' must stay a carriage return, not become
+    // a "\r\n" that shows up as a blank line before every response line.
+    out.clear();
+    ed.writeResponse("\r< done\r\n", out);
+    assert(out == "\r< done\r\n\r$ \r$ ");
+}
+
 void test_multi_line_feed_drains_by_looping_poll() {
     ShellLineEditor ed(4);
     std::string out;
@@ -191,6 +204,7 @@ int main() {
     test_enter_yields_line_and_history();
     test_backspace_fast_path();
     test_write_response_normalises_newlines();
+    test_write_response_keeps_lone_cr_as_carriage_return();
     test_multi_line_feed_drains_by_looping_poll();
     test_unclosed_quote_continues_line();
     test_reverse_search();

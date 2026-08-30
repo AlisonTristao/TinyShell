@@ -125,16 +125,19 @@ void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
     sink_ = &out;
 
     if (!text.empty()) {
-        // Normalise every line ending to CR+LF so each line returns to
-        // column 0 on a real terminal (command output routinely carries a
-        // lone '\n').
+        // Normalise line endings to CR+LF so each line returns to column 0 on
+        // a real terminal (command output routinely carries a lone '\n'). A
+        // lone '\r' is left as-is: it is a carriage return, not a line break
+        // -- turning it into "\r\n" injects a blank line ahead of any text a
+        // caller places after a bare '\r' (ShellOutput::renderResponse emits
+        // one per line, "\r" + prefix + text + "\r\n").
         for (std::size_t i = 0; i < text.size(); ++i) {
             const char c = text[i];
             if (c == '\r') {
                 if (i + 1 < text.size() && text[i + 1] == '\n') {
                     continue;  // emitted on the '\n' below
                 }
-                emit("\r\n");
+                emit('\r');
             } else if (c == '\n') {
                 emit("\r\n");
             } else {
