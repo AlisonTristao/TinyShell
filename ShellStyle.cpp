@@ -1,130 +1,141 @@
 #include "ShellStyle.h"
 
-#include <initializer_list>
-
 namespace {
 
 // ---------------------------------------------------------------------------
-// Small string helpers (kept local -- ShellStyle has no dependency on the
-// trim/lower helpers that live in TinyShell.cpp / ShellLineEditor.cpp).
+// Case-insensitive, allocation-free string ops over std::string_view.
 // ---------------------------------------------------------------------------
 
-std::string to_lower_ascii(const std::string& s) {
-    std::string out = s;
-    for (char& c : out) {
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<char>(c - 'A' + 'a');
-        }
-    }
-    return out;
+constexpr char lower_ascii(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
 
-// Drop CSI sequences (ESC '[' ... final-byte-0x40..0x7E) and lone ESCs, so a
-// line that was already coloured classifies by its text, not its escapes.
-// (Public entry point: shell_strip_sgr, below.)
-std::string strip_sgr(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\x1b') {
-            std::size_t j = i + 1;
-            if (j < s.size() && s[j] == '[') {
-                ++j;
-                while (j < s.size() &&
-                       (static_cast<unsigned char>(s[j]) < 0x40 ||
-                        static_cast<unsigned char>(s[j]) > 0x7E)) {
-                    ++j;  // parameter / intermediate bytes
-                }
-                if (j < s.size()) {
-                    ++j;  // final byte
-                }
-                i = j - 1;
-            }
-            continue;  // lone ESC (or the CSI just skipped): emit nothing
-        }
-        out += s[i];
+bool ci_equal(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) {
+        return false;
     }
-    return out;
-}
-
-std::string trim_copy(const std::string& s) {
-    const char* const ws = " \t\r\n\v\f";
-    const std::size_t begin = s.find_first_not_of(ws);
-    if (begin == std::string::npos) {
-        return std::string();
-    }
-    const std::size_t end = s.find_last_not_of(ws);
-    return s.substr(begin, end - begin + 1);
-}
-
-bool starts_with(const std::string& s, const char* prefix) {
-    std::size_t i = 0;
-    for (; prefix[i] != '\0'; ++i) {
-        if (i >= s.size() || s[i] != prefix[i]) {
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (lower_ascii(a[i]) != lower_ascii(b[i])) {
             return false;
         }
     }
     return true;
 }
 
-bool contains_any(const std::string& hay, std::initializer_list<const char*> needles) {
-    for (const char* needle : needles) {
-        if (hay.find(needle) != std::string::npos) {
+bool ci_starts_with(std::string_view s, std::string_view prefix) noexcept {
+    return s.size() >= prefix.size() && ci_equal(s.substr(0, prefix.size()), prefix);
+}
+
+bool ci_contains(std::string_view hay, std::string_view needle) noexcept {
+    if (needle.empty() || needle.size() > hay.size()) {
+        return false;
+    }
+    const std::size_t last = hay.size() - needle.size();
+    for (std::size_t i = 0; i <= last; ++i) {
+        std::size_t j = 0;
+        for (; j < needle.size(); ++j) {
+            if (lower_ascii(hay[i + j]) != lower_ascii(needle[j])) {
+                break;
+            }
+        }
+        if (j == needle.size()) {
             return true;
         }
     }
     return false;
 }
 
-// ESP-NOW structured line: "[<token>][<...>]..." where <token> is one of the
-// known type tokens (ShellOutput::isEspNowTypeToken on the dongle). These pass
-// through the dongle's renderResponse() verbatim, so the classifier has to
-// recognise them here to colour them.
-bool espnow_structured_class(const std::string& lower, ShellMsgClass& outClass) {
-    if (lower.size() < 4 || lower[0] != '[') {
-        return false;
-    }
-    const std::size_t close = lower.find(']');
-    if (close == std::string::npos || close < 2) {
-        return false;
-    }
-    if (close + 1 >= lower.size() || lower[close + 1] != '[') {
-        return false;
-    }
-
-    const std::string token = lower.substr(1, close - 1);
-    if (token == "error" || token == "erro") {
-        outClass = ShellMsgClass::Error;
-        return true;
-    }
-    if (token == "info" || token == "cmd" || token == "cmdo" || token == "telemetry" ||
-        token == "tele" || token == "debug" || token == "debg" || token == "pakg" ||
-        token == "none") {
-        outClass = ShellMsgClass::Muted;
-        return true;
+template <std::size_t N>
+bool ci_contains_any(std::string_view hay, const std::string_view (&needles)[N]) noexcept {
+    for (const std::string_view needle : needles) {
+        if (ci_contains(hay, needle)) {
+            return true;
+        }
     }
     return false;
 }
 
-// One line -> its SGR-wrapped form, honouring `fallback` and idempotency.
-std::string colorize_line(const std::string& content, ShellMsgClass fallback) {
-    if (content.empty()) {
-        return content;
-    }
-    if (content.find('\x1b') != std::string::npos) {
-        return content;  // already coloured upstream -- leave it alone
+constexpr bool is_ws(char c) noexcept {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+// Advance past leading whitespace and CSI escape runs (ESC '[' ... 0x40..0x7E)
+// plus any lone ESC, then trim a trailing whitespace run. The returned view is
+// what a human reads on that line -- no copy.
+std::string_view logical_view(std::string_view s) noexcept {
+    std::size_t i = 0;
+    for (;;) {
+        while (i < s.size() && is_ws(s[i])) {
+            ++i;
+        }
+        if (i >= s.size() || s[i] != '\x1b') {
+            break;
+        }
+        std::size_t j = i + 1;
+        if (j < s.size() && s[j] == '[') {
+            ++j;
+            while (j < s.size() && (static_cast<unsigned char>(s[j]) < 0x40 ||
+                                    static_cast<unsigned char>(s[j]) > 0x7E)) {
+                ++j;  // parameter / intermediate bytes
+            }
+            if (j < s.size()) {
+                ++j;  // final byte
+            }
+        }
+        i = j;  // lone ESC (j == i+1) or the CSI just skipped
     }
 
-    ShellMsgClass cls = shell_classify_line(content);
-    if (cls == ShellMsgClass::Output && fallback != ShellMsgClass::Output) {
-        cls = fallback;
+    std::size_t end = s.size();
+    while (end > i && is_ws(s[end - 1])) {
+        --end;
+    }
+    return s.substr(i, end - i);
+}
+
+// ESP-NOW structured line: "[<token>][<...>]..." with a known type token
+// (ShellOutput::isEspNowTypeToken on the dongle). These pass through the
+// dongle's renderResponse() verbatim, so recognise them here to colour them.
+bool espnow_structured_class(std::string_view s, ShellMsgClass& outClass) noexcept {
+    if (s.size() < 4 || s.front() != '[') {
+        return false;
+    }
+    const std::size_t close = s.find(']');
+    if (close == std::string_view::npos || close < 2) {
+        return false;
+    }
+    if (close + 1 >= s.size() || s[close + 1] != '[') {
+        return false;
     }
 
-    const char* sgr = shell_sgr(cls);
-    if (sgr[0] == '\0') {
-        return content;  // Output class, or TINYSHELL_COLOR off
+    const std::string_view token = s.substr(1, close - 1);
+    static constexpr std::string_view kError[] = {"error", "erro"};
+    static constexpr std::string_view kMuted[] = {"info", "cmd",   "cmdo", "telemetry", "tele",
+                                                  "debug", "debg", "pakg", "none"};
+    for (const std::string_view t : kError) {
+        if (ci_equal(token, t)) {
+            outClass = ShellMsgClass::Error;
+            return true;
+        }
     }
-    return std::string(sgr) + content + shell_sgr_reset();
+    for (const std::string_view t : kMuted) {
+        if (ci_equal(token, t)) {
+            outClass = ShellMsgClass::Muted;
+            return true;
+        }
+    }
+    return false;
+}
+
+// The loose keyword scan is fuzzy; suppress it when the line clearly *denies*
+// the thing ("sem falhas", "nenhum erro", "no error"). Kept deliberately tight
+// -- unambiguous phrases only, no digit matching ("0 erro" would also catch
+// "10 erros"). Structured prefixes / ESP-NOW tags bypass this entirely.
+bool line_denies(std::string_view s) noexcept {
+    static constexpr std::string_view kNegations[] = {
+        "nenhum", "nenhuma", "sem erro", "sem falha", "sem problema",
+        "no error", "no failure",
+    };
+    return ci_contains_any(s, kNegations);
 }
 
 }  // namespace
@@ -133,82 +144,83 @@ std::string colorize_line(const std::string& content, ShellMsgClass fallback) {
 // Public API
 // ---------------------------------------------------------------------------
 
-const char* shell_sgr(ShellMsgClass cls) {
-#ifdef TINYSHELL_COLOR
-    switch (cls) {
-        case ShellMsgClass::Success: return "\x1b[32m";  // green
-        case ShellMsgClass::Warning: return "\x1b[33m";  // yellow
-        case ShellMsgClass::Error:   return "\x1b[31m";  // red
-        case ShellMsgClass::Help:    return "\x1b[2m";   // faint
-        case ShellMsgClass::Muted:   return "\x1b[90m";  // bright black / grey
-        case ShellMsgClass::Prompt:  return "\x1b[36m";  // cyan   (reserved)
-        case ShellMsgClass::Input:   return "\x1b[1m";   // bold   (reserved)
-        case ShellMsgClass::Output:
-        default:                     return "";
-    }
-#else
-    (void)cls;
-    return "";
-#endif
-}
-
-const char* shell_sgr_reset() {
-#ifdef TINYSHELL_COLOR
-    return "\x1b[0m";
-#else
-    return "";
-#endif
-}
-
-std::string shell_strip_sgr(const std::string& text) {
-    return strip_sgr(text);
-}
-
-ShellMsgClass shell_classify_line(const std::string& rawLine) {
-    const std::string line = trim_copy(strip_sgr(rawLine));
+ShellMsgClass shell_classify_line(std::string_view rawLine) noexcept {
+    const std::string_view line = logical_view(rawLine);
     if (line.empty()) {
         return ShellMsgClass::Output;
     }
 
-    const std::string lower = to_lower_ascii(line);
-
     ShellMsgClass espnowClass;
-    if (espnow_structured_class(lower, espnowClass)) {
+    if (espnow_structured_class(line, espnowClass)) {
         return espnowClass;
     }
 
-    // Explicit prefixes emitted by the dongle's ShellCommandSupport.
-    if (starts_with(lower, "erro(") || starts_with(lower, "erro (")) {
+    // Structured prefixes emitted by the dongle's ShellCommandSupport --
+    // unambiguous, so they win over (and bypass the guard on) the keyword scan.
+    if (ci_starts_with(line, "erro(") || ci_starts_with(line, "erro (")) {
         return ShellMsgClass::Error;
     }
-    if (starts_with(lower, "aviso(") || starts_with(lower, "aviso (")) {
+    if (ci_starts_with(line, "aviso(") || ci_starts_with(line, "aviso (")) {
         return ShellMsgClass::Warning;
     }
-    if (starts_with(lower, "[help]")) {
+    if (ci_starts_with(line, "[help]")) {
         return ShellMsgClass::Help;
     }
 
-    // Keyword scan -- parity with the dongle's lcdColorForLine, plus a few
-    // conservative additions. Error wins over warning wins over success.
-    if (contains_any(lower, {"erro", "error", "falha", "failed", "invalid", "invalido",
-                             "not found", "nao encontrad", "negad", "denied"})) {
-        return ShellMsgClass::Error;
-    }
-    if (contains_any(lower, {"aviso", "warning", "warn", "atencao", "deprecat"})) {
-        return ShellMsgClass::Warning;
-    }
-    if (contains_any(lower, {"sucesso", "success", "inicializado", "atualizado", "enviado",
-                             "adicionado", "removido", "ligado", "desligado", "limpo",
-                             "salvo", "conectado", "pong"})) {
-        return ShellMsgClass::Success;
+    if (!line_denies(line)) {
+        static constexpr std::string_view kError[] = {
+            "erro",  "error",         "falha", "failed", "invalid",
+            "invalido", "not found",  "nao encontrad", "negad", "denied"};
+        static constexpr std::string_view kWarning[] = {"aviso", "warning", "warn", "atencao",
+                                                        "deprecat"};
+        static constexpr std::string_view kSuccess[] = {
+            "sucesso", "success",  "inicializado", "atualizado", "enviado", "adicionado",
+            "removido", "ligado",  "desligado",    "limpo",      "salvo",   "conectado",
+            "pong"};
+        if (ci_contains_any(line, kError)) {
+            return ShellMsgClass::Error;
+        }
+        if (ci_contains_any(line, kWarning)) {
+            return ShellMsgClass::Warning;
+        }
+        if (ci_contains_any(line, kSuccess)) {
+            return ShellMsgClass::Success;
+        }
     }
 
     return ShellMsgClass::Output;
 }
 
-std::string shell_colorize_block(const std::string& text, ShellMsgClass fallback) {
-    if (text.empty()) {
-        return text;
+std::string shell_strip_sgr(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\x1b') {
+            if (i + 1 < s.size() && s[i + 1] == '[') {
+                std::size_t j = i + 2;
+                while (j < s.size() && (static_cast<unsigned char>(s[j]) < 0x40 ||
+                                        static_cast<unsigned char>(s[j]) > 0x7E)) {
+                    ++j;
+                }
+                if (j < s.size()) {
+                    ++j;  // final byte
+                }
+                i = j - 1;  // the loop's ++i lands past the sequence
+            }
+            continue;  // ESC (lone or CSI): emit nothing
+        }
+        out += s[i];
+    }
+    return out;
+}
+
+std::string shell_colorize_block(std::string_view text, ShellMsgClass fallback,
+                                 ShellLineClassifier classifier) {
+    if (!shell_color_enabled() || text.empty() || text.size() > SHELL_MAX_COLORIZE_INPUT) {
+        return std::string(text);
+    }
+    if (classifier == nullptr) {
+        classifier = &shell_classify_line;
     }
 
     std::string out;
@@ -218,7 +230,7 @@ std::string shell_colorize_block(const std::string& text, ShellMsgClass fallback
     const std::size_t n = text.size();
     while (i < n) {
         const std::size_t nl = text.find('\n', i);
-        const bool hasNewline = (nl != std::string::npos);
+        const bool hasNewline = (nl != std::string_view::npos);
         const std::size_t chunkEnd = hasNewline ? nl : n;
 
         std::size_t contentEnd = chunkEnd;
@@ -227,14 +239,30 @@ std::string shell_colorize_block(const std::string& text, ShellMsgClass fallback
             --contentEnd;
         }
 
-        out += colorize_line(text.substr(i, contentEnd - i), fallback);
+        const std::string_view content = text.substr(i, contentEnd - i);
+        if (content.empty() || content.find('\x1b') != std::string_view::npos) {
+            out.append(content);  // blank line, or already coloured -> passthrough
+        } else {
+            ShellMsgClass cls = classifier(content);
+            if (cls == ShellMsgClass::Output && fallback != ShellMsgClass::Output) {
+                cls = fallback;
+            }
+            const char* sgr = shell_sgr(cls);
+            if (sgr[0] == '\0') {
+                out.append(content);
+            } else {
+                out.append(sgr);
+                out.append(content);
+                out.append(shell_sgr_reset());
+            }
+        }
+
         if (hasCr) {
             out += '\r';
         }
         if (hasNewline) {
             out += '\n';
         }
-
         i = hasNewline ? nl + 1 : n;
     }
 
