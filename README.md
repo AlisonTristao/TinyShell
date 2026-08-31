@@ -2,7 +2,30 @@
 
 ## Version
 
-Current version: **1.2.0**
+Current version: **1.3.0**
+
+### What's New in 1.3.0
+
+`ShellStyle` refinements for embedded use:
+
+- **`shell_classify_line()` is now allocation-free.** It takes a
+  `std::string_view` and scans in place (was 3 `std::string` copies: strip +
+  trim + lowercase). Safe on the hot path.
+- **`shell_colorize_block()` short-circuits.** Returns the input untouched when
+  colour is disabled or the block exceeds `SHELL_MAX_COLORIZE_INPUT` (8 KiB) —
+  no per-line work in a no-colour build.
+- **Pluggable classification.** `shell_colorize_block()` takes an optional
+  `ShellLineClassifier` (plain function pointer). The built-in keyword heuristic
+  is just the default — a project keys colours off whatever it wants.
+- **`shell_sgr` / `shell_sgr_reset` are `constexpr`**; new `shell_color_enabled()`.
+- **Conservative negation guard**: a line that *denies* the thing
+  ("sem falhas", "nenhum erro", "no error") is no longer classified `Error` off
+  a stray keyword. Structured prefixes / ESP-NOW tags still win outright.
+- **API:** `shell_classify_line` / `shell_strip_sgr` / `shell_colorize_block`
+  now take `std::string_view` (source-compatible — `std::string` and
+  `const char*` convert implicitly).
+- **Removed** `ShellMsgClass::Prompt` / `Input` (were reserved, unused). The
+  ShellLineEditor "Layer 2" work re-introduces them.
 
 ### What's New in 1.2.0
 
@@ -144,8 +167,8 @@ A few notes:
 
 `ShellStyle` turns an output line into a **semantic class** and, when the
 compile flag `TINYSHELL_COLOR` is defined, wraps it in a standard ANSI SGR
-sequence. It is framework-free (only `<string>`/`<cstdint>`) and has no
-dependency on `TinyShell` or `ShellLineEditor`.
+sequence. Framework-free (standard string headers only), no dependency on
+`TinyShell` or `ShellLineEditor`.
 
 ### Classes and colours
 
@@ -157,27 +180,34 @@ dependency on `TinyShell` or `ShellLineEditor`.
 | `Error` | `\e[31m` red | `erro(...)`, `falha`, `not found`, `invalid`, … |
 | `Help` | `\e[2m` faint | `[help] …`, `get_help()` dumps |
 | `Muted` | `\e[90m` grey | ESP-NOW `[info]`/`[debug]`/`[telemetry]`/`[cmd]` lines |
-| `Prompt` / `Input` | `\e[36m` / `\e[1m` | reserved for a future `ShellLineEditor` mode |
 
-Keyword matching is bilingual (pt/en) and deliberately conservative — same set
-the calling firmware already uses to colour its LCD.
+The built-in `shell_classify_line` is bilingual (pt/en). Structured prefixes
+(`erro(`, `aviso(`, `[help]`) and ESP-NOW tags (`[error][…]`) are confident; the
+looser keyword scan is skipped when the line *denies* the thing ("sem falhas",
+"nenhum erro"). It is just the **default** — pass your own classifier to
+`shell_colorize_block`.
 
 ### API
 
 ```cpp
 #include "ShellStyle.h"
 
-ShellMsgClass shell_classify_line(const std::string& line);   // prefix + keyword, idempotent on coloured text
-const char*   shell_sgr(ShellMsgClass);                       // "\x1b[..m"  ("" for Output / flag off)
-const char*   shell_sgr_reset();                              // "\x1b[0m"   ("" when flag off)
-std::string   shell_strip_sgr(const std::string& text);      // drop every CSI escape (always available)
-std::string   shell_colorize_block(const std::string& text,   // split lines, classify, wrap, rejoin
-                                   ShellMsgClass fallback = ShellMsgClass::Output);
+using ShellLineClassifier = ShellMsgClass (*)(std::string_view);
+
+constexpr bool  shell_color_enabled();                        // == TINYSHELL_COLOR
+constexpr const char* shell_sgr(ShellMsgClass);               // "\x1b[..m"  ("" for Output / colour off)
+constexpr const char* shell_sgr_reset();                      // "\x1b[0m"   ("" when colour off)
+
+ShellMsgClass shell_classify_line(std::string_view line) noexcept;   // zero-alloc, in-place scan
+std::string   shell_strip_sgr(std::string_view text);               // drop every CSI escape (always available)
+std::string   shell_colorize_block(std::string_view text,           // split lines, classify, wrap, rejoin
+                                   ShellMsgClass fallback = ShellMsgClass::Output,
+                                   ShellLineClassifier classifier = &shell_classify_line);
 ```
 
-`shell_colorize_block` keeps the exact line terminators of the input, skips any
-line that already contains an ESC byte, and — with `TINYSHELL_COLOR` **not**
-defined — returns `text` byte-for-byte.
+`shell_colorize_block` keeps the exact line terminators, skips any line that
+already contains an ESC byte, and returns `text` unchanged when colour is
+disabled or `text` exceeds `SHELL_MAX_COLORIZE_INPUT` (8 KiB).
 
 ### Integration
 
@@ -189,7 +219,8 @@ messages — just build with `-DTINYSHELL_COLOR`.
 
 A host program that captures command output itself (a firmware that feeds the
 result to its own transport) can call `shell_classify_line()` per line to reuse
-the exact same classification for its transport and its display.
+the exact same classification for its transport and its display — it is
+`noexcept` and allocation-free, so calling it on every LCD refresh is fine.
 
 ---
 
