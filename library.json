@@ -1,6 +1,6 @@
 {
   "name": "TinyShell",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A tiny shell for embedded systems, with a simple command structure and a help module, a portable server-side line editor (ShellLineEditor), and semantic ANSI colouring of output (ShellStyle).",
   "main": "TinyShell.cpp",
   "repository": {

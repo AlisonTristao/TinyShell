@@ -30,6 +30,23 @@ std::string vis(const std::string& s) {
     return o;
 }
 
+std::string stripSgr(const std::string& s) {
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '\x1b') {
+            out += s[i];
+            continue;
+        }
+        if (i + 1 < s.size() && s[i + 1] == '[') {
+            i += 2;
+            while (i < s.size() && !(s[i] >= '@' && s[i] <= '~')) {
+                ++i;
+            }
+        }
+    }
+    return out;
+}
+
 void test_prompt_and_fast_path_echo() {
     ShellLineEditor ed(8);
     std::string out;
@@ -40,7 +57,66 @@ void test_prompt_and_fast_path_echo() {
     ed.feed(std::string("he"));
     std::string line;
     assert(!ed.poll(out, &line));
-    assert(out == "he");  // per-char echo while the line fits one render row
+    assert(stripSgr(out) == "he");  // per-char echo while the line fits one render row
+}
+
+void test_command_tokens_use_semantic_echo_colours() {
+    ShellLineEditor ed(8);
+    std::string out;
+    ed.setPrompt("$ ", out);
+
+    out.clear();
+    ed.feed(std::string("dongle -ping 7"));
+    std::string line;
+    assert(!ed.poll(out, &line));
+#ifdef TINYSHELL_COLOR
+    assert(out == "\x1b[33mdongle\x1b[30m \x1b[34m-ping\x1b[30m 7\x1b[0m");
+#else
+    assert(out == "dongle -ping 7");
+#endif
+}
+
+void test_each_echo_batch_resets_its_colour() {
+    ShellLineEditor ed(8);
+    std::string out;
+    ed.setPrompt("$ ", out);
+
+    out.clear();
+    ed.feed(std::string("d"));
+    ed.poll(out, nullptr);
+#ifdef TINYSHELL_COLOR
+    assert(out == "\x1b[33md\x1b[0m");
+#else
+    assert(out == "d");
+#endif
+
+    out.clear();
+    ed.feed(std::string("o"));
+    ed.poll(out, nullptr);
+#ifdef TINYSHELL_COLOR
+    assert(out == "\x1b[33mo\x1b[0m");
+#else
+    assert(out == "o");
+#endif
+}
+
+void test_history_redraw_preserves_command_token_colours() {
+    ShellLineEditor ed(8);
+    std::string out;
+    ed.setPrompt("$ ", out);
+    ed.addHistory("dongle -ping 7");
+
+    out.clear();
+    ed.feed(std::string("\x1b[A"));
+    ed.poll(out, nullptr);
+    assert(stripSgr(out).find("$ dongle -ping 7") != std::string::npos);
+#ifdef TINYSHELL_COLOR
+    assert(out.find("\x1b[33mdongle") != std::string::npos);
+    assert(out.find("\x1b[34m-ping") != std::string::npos);
+    assert(out.find("\x1b[30m 7") != std::string::npos);
+#else
+    assert(out.find('\x1b') == std::string::npos);
+#endif
 }
 
 void test_tab_completion() {
@@ -64,7 +140,7 @@ void test_tab_completion() {
     out.clear();
     ed.feed(std::string("\t"));
     assert(!ed.poll(out, &line));
-    assert(out == "\r$ help \r$ help ");
+    assert(stripSgr(out) == "\r$ help \r$ help ");
 }
 
 void test_enter_yields_line_and_history() {
@@ -78,7 +154,7 @@ void test_enter_yields_line_and_history() {
     out.clear();
     std::string line;
     assert(!ed.poll(out, &line));
-    assert(out == "info");
+    assert(stripSgr(out) == "info");
 
     ed.feed(std::string("\r"));
     out.clear();
@@ -148,7 +224,7 @@ void test_write_async_output_breaks_off_prompt_then_stacks() {
     // The burst pauses: refreshLine() brings the "$ ab" edit line back intact.
     out.clear();
     ed.refreshLine(out);
-    assert(vis(out).find("$ ab") != std::string::npos);
+    assert(vis(stripSgr(out)).find("$ ab") != std::string::npos);
 
     // The in-progress input survived -- CR still completes "ab".
     ed.feed(std::string("\r"));
@@ -197,7 +273,7 @@ void test_reverse_search() {
     out.clear();
     ed.feed(std::string("\x12"));  // Ctrl+R -> most recent "sen*" match
     ed.poll(out, nullptr);
-    assert(vis(out).find("sensor -imu_status") != std::string::npos);
+    assert(vis(stripSgr(out)).find("sensor -imu_status") != std::string::npos);
 }
 
 void test_long_line_scrolls_and_still_completes() {
@@ -230,6 +306,9 @@ void test_feed_backlog_is_capped_not_unbounded() {
 
 int main() {
     test_prompt_and_fast_path_echo();
+    test_command_tokens_use_semantic_echo_colours();
+    test_each_echo_batch_resets_its_colour();
+    test_history_redraw_preserves_command_token_colours();
     test_tab_completion();
     test_enter_yields_line_and_history();
     test_backspace_fast_path();

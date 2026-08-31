@@ -1,13 +1,17 @@
 #include "ShellLineEditor.h"
 
+#include "ShellStyle.h"
+
 // The wire protocol this speaks, both directions, is a plain VT100 subset:
 //   in   printable bytes; DEL(0x7f)/BS(0x08) erase; CR or LF submits the
 //        line; TAB completes; Ctrl+R (0x12) reverse-searches; ESC [ A/B/C/D
 //        are up/down/left/right.
 //   out  the typed characters echoed back; "\b \b" for an erase; a '\r' plus
 //        a reprint of the line for a full redraw (history recall, wrap).
-// No other CSI sequences are emitted, so the far terminal only needs to
-// understand '\r', '\b' and overwrite-at-cursor.
+// With TINYSHELL_COLOR the output also carries standard SGR foreground/reset
+// sequences for the command tokens. No cursor-addressing CSI is emitted, so
+// the far terminal still only needs '\r', '\b' and overwrite-at-cursor for
+// editing.
 
 namespace {
 
@@ -45,6 +49,7 @@ void ShellLineEditor::reset() {
     renderedLength_ = 0;
     cursorIndex_ = 0;
     escState_ = EscState::None;
+    activeInputStyle_ = InputStyle::Default;
     ignoreNextLf_ = false;
     historyCursor_ = -1;
     resetTabCycle();
@@ -69,6 +74,92 @@ void ShellLineEditor::emit(const std::string& s) {
     }
 }
 
+void ShellLineEditor::setInputStyle(InputStyle style) {
+    if (style == activeInputStyle_) {
+        return;
+    }
+
+    const char* sgr = "";
+    switch (style) {
+        case InputStyle::Module:
+            sgr = shell_sgr(ShellMsgClass::InputModule);
+            break;
+        case InputStyle::Function:
+            sgr = shell_sgr(ShellMsgClass::InputFunction);
+            break;
+        case InputStyle::Argument:
+            sgr = shell_sgr(ShellMsgClass::InputArgument);
+            break;
+        case InputStyle::Default:
+        default:
+            sgr = shell_sgr_reset();
+            break;
+    }
+    emit(sgr);
+    activeInputStyle_ = style;
+}
+
+void ShellLineEditor::resetInputStyle() {
+    setInputStyle(InputStyle::Default);
+}
+
+void ShellLineEditor::emitStyledInputChar(char c, std::size_t inputIndex) {
+    setInputStyle(inputStyleAt(inputIndex));
+    emit(c);
+}
+
+void ShellLineEditor::emitVisibleInput(const std::string& visibleInput, std::size_t count,
+                                       std::size_t inputStart, bool leftTruncated,
+                                       bool rightTruncated) {
+    if (count > visibleInput.size()) {
+        count = visibleInput.size();
+    }
+
+    std::size_t tokenIndex = 0;
+    bool sawToken = false;
+    bool inToken = false;
+    auto consumeStyle = [&](char ch) -> InputStyle {
+        const bool whitespace = ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' ||
+                                ch == '\v' || ch == '\f';
+        if (whitespace) {
+            inToken = false;
+            return InputStyle::Argument;
+        }
+        if (!inToken) {
+            if (sawToken) {
+                ++tokenIndex;
+            } else {
+                sawToken = true;
+            }
+            inToken = true;
+        }
+        return tokenIndex == 0 ? InputStyle::Module
+                              : (tokenIndex == 1 ? InputStyle::Function
+                                                 : InputStyle::Argument);
+    };
+
+    // Prime the tokenizer once up to the left edge of a horizontally scrolled
+    // window. The visible run is then O(inputStart + visible columns), rather
+    // than rescanning the whole command separately for every rendered byte.
+    for (std::size_t i = 0; i < inputStart; ++i) {
+        (void)consumeStyle(inputBuffer_[i]);
+    }
+
+    const std::size_t sourceOffset = leftTruncated ? 1U : 0U;
+    for (std::size_t i = 0; i < count; ++i) {
+        const bool isLeftMarker = leftTruncated && i == 0;
+        const bool isRightMarker = rightTruncated && i + 1 == visibleInput.size();
+        if (isLeftMarker || isRightMarker) {
+            resetInputStyle();
+            emit(visibleInput[i]);
+            continue;
+        }
+        const std::size_t inputIndex = inputStart + i - sourceOffset;
+        setInputStyle(consumeStyle(inputBuffer_[inputIndex]));
+        emit(visibleInput[i]);
+    }
+}
+
 void ShellLineEditor::feed(const std::uint8_t* data, std::size_t len) {
     if (data == nullptr || len == 0 || pendingInput_.size() >= MAX_PENDING_INPUT) {
         return;
@@ -83,6 +174,7 @@ void ShellLineEditor::feed(const std::string& data) {
 
 bool ShellLineEditor::poll(std::string& out, std::string* outLine) {
     sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
 
     std::string line;
     bool lineReady = false;
@@ -97,6 +189,7 @@ bool ShellLineEditor::poll(std::string& out, std::string* outLine) {
     }
     pendingInput_.erase(0, consumed);
 
+    resetInputStyle();
     sink_ = nullptr;
     if (outLine != nullptr) {
         *outLine = lineReady ? line : std::string();
@@ -111,13 +204,17 @@ void ShellLineEditor::setPrompt(const std::string& text) {
 void ShellLineEditor::setPrompt(const std::string& text, std::string& out) {
     prompt_ = text;
     sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
     redrawInput();
+    resetInputStyle();
     sink_ = nullptr;
 }
 
 void ShellLineEditor::refreshLine(std::string& out) {
     sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
     redrawInput();
+    resetInputStyle();
     sink_ = nullptr;
 }
 
@@ -152,6 +249,7 @@ void ShellLineEditor::emitResponseBody(const std::string& text) {
 
 void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
     sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
 
     emitResponseBody(text);
 
@@ -160,6 +258,7 @@ void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
     renderedLength_ = 0;
     redrawInput();
 
+    resetInputStyle();
     sink_ = nullptr;
 }
 
@@ -168,6 +267,7 @@ void ShellLineEditor::writeAsyncOutput(const std::string& text, std::string& out
         return;
     }
     sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
 
     // Move off the prompt/input line so the text starts on its own line -- but
     // only on the first call of a burst. A run of these then sees
@@ -182,6 +282,7 @@ void ShellLineEditor::writeAsyncOutput(const std::string& text, std::string& out
     // Cursor sits at column 0 of a fresh line; the prompt is deliberately NOT
     // repainted here (see the header doc) so consecutive bursts do not put a
     // prompt between every line. Call refreshLine() once the burst pauses.
+    resetInputStyle();
     sink_ = nullptr;
 }
 
@@ -234,7 +335,47 @@ bool ShellLineEditor::fitsSingleRenderLine() const {
     return (prompt_.size() + inputBuffer_.size()) <= MAX_RENDER_COLUMNS;
 }
 
-void ShellLineEditor::buildVisibleInput(std::string& visibleInput, std::size_t& cursorInVisible) const {
+ShellLineEditor::InputStyle ShellLineEditor::inputStyleAt(std::size_t inputIndex) const {
+    if (inputIndex >= inputBuffer_.size()) {
+        return InputStyle::Default;
+    }
+
+    std::size_t tokenIndex = 0;
+    bool sawToken = false;
+    bool inToken = false;
+    for (std::size_t i = 0; i <= inputIndex; ++i) {
+        const char ch = inputBuffer_[i];
+        const bool whitespace = ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' ||
+                                ch == '\v' || ch == '\f';
+        if (whitespace) {
+            inToken = false;
+            if (i == inputIndex) {
+                return InputStyle::Argument;
+            }
+            continue;
+        }
+        if (!inToken) {
+            if (sawToken) {
+                ++tokenIndex;
+            } else {
+                sawToken = true;
+            }
+            inToken = true;
+        }
+    }
+
+    if (tokenIndex == 0) {
+        return InputStyle::Module;
+    }
+    if (tokenIndex == 1) {
+        return InputStyle::Function;
+    }
+    return InputStyle::Argument;
+}
+
+void ShellLineEditor::buildVisibleInput(std::string& visibleInput, std::size_t& cursorInVisible,
+                                        std::size_t& inputStart, bool& leftTruncated,
+                                        bool& rightTruncated) const {
     const std::size_t promptLen = prompt_.size();
     std::size_t maxInputColumns = 8;
     if (MAX_RENDER_COLUMNS > promptLen) {
@@ -245,6 +386,9 @@ void ShellLineEditor::buildVisibleInput(std::string& visibleInput, std::size_t& 
     if (inputLen <= maxInputColumns) {
         visibleInput = inputBuffer_;
         cursorInVisible = cursorIndex_;
+        inputStart = 0;
+        leftTruncated = false;
+        rightTruncated = false;
         return;
     }
 
@@ -259,8 +403,9 @@ void ShellLineEditor::buildVisibleInput(std::string& visibleInput, std::size_t& 
     }
 
     const std::size_t end = start + coreColumns;
-    const bool leftTruncated = (start > 0);
-    const bool rightTruncated = (end < inputLen);
+    leftTruncated = (start > 0);
+    rightTruncated = (end < inputLen);
+    inputStart = start;
 
     visibleInput.clear();
     if (leftTruncated) {
@@ -344,6 +489,7 @@ void ShellLineEditor::processChar(char c, bool& lineReady, std::string& outLine)
         std::string line = inputBuffer_;
         trimInPlace(line);
 
+        resetInputStyle();
         emit("\r\n");
 
         inputBuffer_.clear();
@@ -390,7 +536,7 @@ void ShellLineEditor::processChar(char c, bool& lineReady, std::string& outLine)
             ++cursorIndex_;
 
             if (fitsSingleRenderLine()) {
-                emit(c);
+                emitStyledInputChar(c, cursorIndex_ - 1);
                 renderedLength_ = prompt_.size() + inputBuffer_.size();
                 return;
             }
@@ -410,13 +556,18 @@ void ShellLineEditor::processChar(char c, bool& lineReady, std::string& outLine)
 void ShellLineEditor::redrawInput() {
     std::string visibleInput;
     std::size_t cursorInVisible = 0;
-    buildVisibleInput(visibleInput, cursorInVisible);
+    std::size_t inputStart = 0;
+    bool leftTruncated = false;
+    bool rightTruncated = false;
+    buildVisibleInput(visibleInput, cursorInVisible, inputStart, leftTruncated, rightTruncated);
 
     const std::string visibleLine = prompt_ + visibleInput;
-    const std::size_t cursorColumn = prompt_.size() + cursorInVisible;
 
+    resetInputStyle();
     emit('\r');
-    emit(visibleLine);
+    emit(prompt_);
+    emitVisibleInput(visibleInput, visibleInput.size(), inputStart, leftTruncated, rightTruncated);
+    resetInputStyle();
 
     if (renderedLength_ > visibleLine.size()) {
         const std::size_t extra = renderedLength_ - visibleLine.size();
@@ -426,9 +577,9 @@ void ShellLineEditor::redrawInput() {
     }
 
     emit('\r');
-    for (std::size_t i = 0; i < cursorColumn && i < visibleLine.size(); ++i) {
-        emit(visibleLine[i]);
-    }
+    emit(prompt_);
+    emitVisibleInput(visibleInput, cursorInVisible, inputStart, leftTruncated, rightTruncated);
+    resetInputStyle();
 
     renderedLength_ = visibleLine.size();
 }
@@ -526,7 +677,7 @@ void ShellLineEditor::onArrowRight() {
     }
 
     if (fitsSingleRenderLine()) {
-        emit(inputBuffer_[cursorIndex_]);
+        emitStyledInputChar(inputBuffer_[cursorIndex_], cursorIndex_);
         ++cursorIndex_;
     } else {
         ++cursorIndex_;

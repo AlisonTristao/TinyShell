@@ -2,7 +2,17 @@
 
 ## Version
 
-Current version: **1.3.0**
+Current version: **1.4.0**
+
+### What's New in 1.4.0
+
+`ShellLineEditor` now colours the live command echo when `TINYSHELL_COLOR` is
+enabled: the module (first token) is dark yellow, the function (second token,
+including its leading `-`) is dark blue, and arguments are black. Full redraws
+from history, Tab completion, cursor movement, mid-line edits and horizontal
+scrolling retain the token colours. Every emitted batch ends with an SGR reset
+so input colour cannot leak into command output. Builds without the flag remain
+byte-for-byte unchanged.
 
 ### What's New in 1.3.0
 
@@ -25,7 +35,8 @@ Current version: **1.3.0**
   now take `std::string_view` (source-compatible — `std::string` and
   `const char*` convert implicitly).
 - **Removed** `ShellMsgClass::Prompt` / `Input` (were reserved, unused). The
-  ShellLineEditor "Layer 2" work re-introduces them.
+  1.4.0 editor work later adds the specific `InputModule`, `InputFunction` and
+  `InputArgument` classes actually needed by live echo.
 
 ### What's New in 1.2.0
 
@@ -83,7 +94,7 @@ side:
 
 | The user does | `ShellLineEditor` emits |
 | --- | --- |
-| types a printable char | echoes it |
+| types a printable char | echoes it (with token colour when enabled) |
 | Backspace (`0x08` or `0x7f`) | `"\b \b"`, or a full line redraw |
 | `←` / `→` (`ESC [ D` / `ESC [ C`) | moves the cursor in place |
 | `↑` / `↓` (`ESC [ A` / `ESC [ B`) | recalls a circular command history |
@@ -92,9 +103,10 @@ side:
 | a line wider than the render width | scrolls it horizontally (`<`…`>`) |
 | `Enter` (`CR` or `LF`) | ends the line and hands it back |
 
-The only control bytes it ever writes are `\r`, `\b` and overwrite-at-cursor —
-no full ANSI/CSI vocabulary — so the far terminal needs to understand almost
-nothing.
+For editing, the only control bytes it writes are `\r`, `\b` and
+overwrite-at-cursor. A colour-enabled build additionally emits the small ANSI
+SGR subset documented below; it still emits no cursor-addressing CSI, so the
+far terminal needs to understand almost nothing.
 
 It is **not** an I/O object: it has no `Stream`, does not block, and does no
 allocation you cannot see. Input arrives through `feed()`; everything it would
@@ -149,6 +161,9 @@ A few notes:
   replaying a persisted history at start-up.
 * Command lines and the response are trimmed; `writeResponse` normalises lone
   `\n` to `\r\n`.
+* With `TINYSHELL_COLOR`, the first command token (module) uses ANSI 33 (dark
+  yellow), the second (function) uses ANSI 34 (dark blue), and all remaining
+  tokens (arguments) use ANSI 30 (black). Each output batch ends in ANSI reset.
 * One instance is **not thread-safe** — drive it from a single thread/task.
 
 ### Constants (compile-time, in `ShellLineEditor.h`)
@@ -180,6 +195,9 @@ sequence. Framework-free (standard string headers only), no dependency on
 | `Error` | `\e[31m` red | `erro(...)`, `falha`, `not found`, `invalid`, … |
 | `Help` | `\e[2m` faint | `[help] …`, `get_help()` dumps |
 | `Muted` | `\e[90m` grey | ESP-NOW `[info]`/`[debug]`/`[telemetry]`/`[cmd]` lines |
+| `InputModule` | `\e[33m` dark yellow | first live command token |
+| `InputFunction` | `\e[34m` dark blue | second live command token |
+| `InputArgument` | `\e[30m` black | remaining live command tokens |
 
 The built-in `shell_classify_line` is bilingual (pt/en). Structured prefixes
 (`erro(`, `aviso(`, `[help]`) and ESP-NOW tags (`[error][…]`) are confident; the

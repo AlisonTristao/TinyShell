@@ -135,11 +135,17 @@ void test_gate() {
     assert(shell_color_enabled());
     assert(std::string(shell_sgr(ShellMsgClass::Error)) == "\x1b[31m");
     assert(std::string(shell_sgr(ShellMsgClass::Output)).empty());  // Output never colours
+    assert(std::string(shell_sgr(ShellMsgClass::InputModule)) == "\x1b[33m");
+    assert(std::string(shell_sgr(ShellMsgClass::InputFunction)) == "\x1b[34m");
+    assert(std::string(shell_sgr(ShellMsgClass::InputArgument)) == "\x1b[30m");
     assert(std::string(shell_sgr_reset()) == "\x1b[0m");
     assert(shell_colorize_block("boom: erro fatal\n") == "\x1b[31mboom: erro fatal\x1b[0m\n");
 #else
     assert(!shell_color_enabled());
     assert(std::string(shell_sgr(ShellMsgClass::Error)).empty());
+    assert(std::string(shell_sgr(ShellMsgClass::InputModule)).empty());
+    assert(std::string(shell_sgr(ShellMsgClass::InputFunction)).empty());
+    assert(std::string(shell_sgr(ShellMsgClass::InputArgument)).empty());
     assert(std::string(shell_sgr_reset()).empty());
     // Flag off => byte-for-byte identity, classifier notwithstanding.
     const std::string in = "boom: erro fatal\nok: led ligado\n[help] x\n";

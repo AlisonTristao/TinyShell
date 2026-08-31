@@ -34,9 +34,9 @@ enum class ShellMsgClass : std::uint8_t {
     Error,       ///< failures ("erro(...)", "falha", "not found", "invalid")
     Help,        ///< help / usage listings (`get_help()`, "[help] ...")
     Muted,       ///< low-priority: ESP-NOW [info]/[debug]/[telemetry] log lines
-    // Prompt / Input are intentionally absent: colouring the live prompt and the
-    // input echo is "Layer 2" work that needs ShellLineEditor to track printable
-    // width. The version that does it re-introduces the values here.
+    InputModule,   ///< first command token (dark yellow)
+    InputFunction, ///< second command token (dark blue)
+    InputArgument, ///< remaining command tokens (black)
 };
 
 /// A line -> its semantic class. Same shape as `shell_classify_line`, so that
@@ -65,6 +65,9 @@ constexpr const char* shell_sgr(ShellMsgClass cls) noexcept {
         case ShellMsgClass::Error:   return "\x1b[31m";  // red
         case ShellMsgClass::Help:    return "\x1b[2m";   // faint
         case ShellMsgClass::Muted:   return "\x1b[90m";  // bright black / grey
+        case ShellMsgClass::InputModule:   return "\x1b[33m";  // dark yellow
+        case ShellMsgClass::InputFunction: return "\x1b[34m";  // dark blue
+        case ShellMsgClass::InputArgument: return "\x1b[30m";  // black
         case ShellMsgClass::Output:
         default:                     return "";
     }

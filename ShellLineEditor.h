@@ -33,6 +33,11 @@
  * it would echo is appended to a std::string you own, so no Stream, no
  * blocking, no I/O of its own.
  *
+ * When TINYSHELL_COLOR is enabled, live input is token-coloured with standard
+ * ANSI SGR: module dark yellow, function dark blue, arguments black. The
+ * escape bytes never count toward cursor columns and each public output batch
+ * restores the default rendition before returning.
+ *
  * Usage:
  *   ShellLineEditor ed;
  *   std::string out;
@@ -72,7 +77,8 @@ public:
 
     /**
      * @brief Process buffered input. Everything the editor echoes (typed
-     * characters, backspace erases, history recall, prompt redraws) is
+     * characters, backspace erases, history recall, prompt redraws, and any
+     * enabled token-colour SGR) is
      * appended to @p out.
      *
      * @param outLine When non-null, receives the trimmed command line the
@@ -141,6 +147,7 @@ private:
     static constexpr std::size_t MAX_PENDING_INPUT = 4096;
 
     enum class EscState : std::uint8_t { None, Esc, Bracket };
+    enum class InputStyle : std::uint8_t { Default, Module, Function, Argument };
 
     // Output sink for the current public call: set on entry, cleared on exit.
     // Every private helper appends echo/redraw bytes through emit() rather
@@ -149,6 +156,12 @@ private:
     void emit(char c);
     void emit(const char* s);
     void emit(const std::string& s);
+    void setInputStyle(InputStyle style);
+    void resetInputStyle();
+    void emitStyledInputChar(char c, std::size_t inputIndex);
+    void emitVisibleInput(const std::string& visibleInput, std::size_t count,
+                          std::size_t inputStart, bool leftTruncated,
+                          bool rightTruncated);
     // Shared body of writeResponse()/writeAsyncOutput(): CR+LF-normalised
     // append of `text` to sink_, with a closing "\r\n" when it lacks one.
     void emitResponseBody(const std::string& text);
@@ -161,6 +174,7 @@ private:
     std::size_t renderedLength_ = 0;
     std::size_t cursorIndex_ = 0;
     EscState escState_ = EscState::None;
+    InputStyle activeInputStyle_ = InputStyle::Default;
     bool ignoreNextLf_ = false;
 
     std::vector<std::string> historyStorage_;  // sized to capacity_
@@ -183,7 +197,10 @@ private:
     void processChar(char c, bool& lineReady, std::string& outLine);
     bool hasUnclosedDoubleQuote() const;
     bool fitsSingleRenderLine() const;
-    void buildVisibleInput(std::string& visibleInput, std::size_t& cursorInVisible) const;
+    InputStyle inputStyleAt(std::size_t inputIndex) const;
+    void buildVisibleInput(std::string& visibleInput, std::size_t& cursorInVisible,
+                           std::size_t& inputStart, bool& leftTruncated,
+                           bool& rightTruncated) const;
     void redrawInput();
     void eraseLastChar();
     void onArrowUp();
