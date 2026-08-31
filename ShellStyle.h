@@ -48,6 +48,16 @@ const char* shell_sgr(ShellMsgClass cls);
 const char* shell_sgr_reset();
 
 /**
+ * @brief Remove every CSI escape sequence (ESC '[' ... final byte) and any
+ * lone ESC from @p text.
+ *
+ * Compiled and usable regardless of `TINYSHELL_COLOR`. Handy before persisting
+ * command output to a log or measuring its printable width, and to give a
+ * consumer that re-colours the stream itself a single, escape-free source.
+ */
+std::string shell_strip_sgr(const std::string& text);
+
+/**
  * @brief Classify a single output line by prefix and keyword (bilingual
  * pt/en, parity with the dongle's existing `lcdColorForLine`).
  *

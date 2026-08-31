@@ -40,6 +40,13 @@ void test_classify_is_idempotent_on_coloured_text() {
     assert(shell_classify_line("\x1b[32mtudo certo\x1b[0m") == ShellMsgClass::Output);
 }
 
+void test_strip_sgr() {
+    assert(shell_strip_sgr("\x1b[31mred\x1b[0m plain") == "red plain");
+    assert(shell_strip_sgr("no escapes here") == "no escapes here");
+    assert(shell_strip_sgr("a\x1b[1;33;2mb\x1b[0mc") == "abc");
+    assert(shell_strip_sgr("trailing\x1b") == "trailing");
+}
+
 // -- colorize_block: terminator / identity behaviour ------------------------
 
 void test_colorize_block_preserves_terminators() {
@@ -100,6 +107,7 @@ int main() {
     test_classify_prefixes();
     test_classify_keywords();
     test_classify_is_idempotent_on_coloured_text();
+    test_strip_sgr();
     test_colorize_block_preserves_terminators();
     test_colorize_block_leaves_precoloured_lines();
     test_colorize_block_fallback_only_hits_plain_lines();

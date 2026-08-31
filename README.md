@@ -170,6 +170,7 @@ the calling firmware already uses to colour its LCD.
 ShellMsgClass shell_classify_line(const std::string& line);   // prefix + keyword, idempotent on coloured text
 const char*   shell_sgr(ShellMsgClass);                       // "\x1b[..m"  ("" for Output / flag off)
 const char*   shell_sgr_reset();                              // "\x1b[0m"   ("" when flag off)
+std::string   shell_strip_sgr(const std::string& text);      // drop every CSI escape (always available)
 std::string   shell_colorize_block(const std::string& text,   // split lines, classify, wrap, rejoin
                                    ShellMsgClass fallback = ShellMsgClass::Output);
 ```

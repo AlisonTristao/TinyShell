@@ -21,6 +21,7 @@ std::string to_lower_ascii(const std::string& s) {
 
 // Drop CSI sequences (ESC '[' ... final-byte-0x40..0x7E) and lone ESCs, so a
 // line that was already coloured classifies by its text, not its escapes.
+// (Public entry point: shell_strip_sgr, below.)
 std::string strip_sgr(const std::string& s) {
     std::string out;
     out.reserve(s.size());
@@ -157,6 +158,10 @@ const char* shell_sgr_reset() {
 #else
     return "";
 #endif
+}
+
+std::string shell_strip_sgr(const std::string& text) {
+    return strip_sgr(text);
 }
 
 ShellMsgClass shell_classify_line(const std::string& rawLine) {
