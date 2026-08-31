@@ -2,7 +2,23 @@
 
 ## Version
 
-Current version: **1.1.0**
+Current version: **1.2.0**
+
+### What's New in 1.2.0
+
+- Added **`ShellStyle`** (`ShellStyle.h` / `.cpp`) — a framework-free semantic
+  classifier + ANSI SGR palette for shell output. The shell side decides what a
+  line *means* (success / warning / error / help / muted log) and wraps it in
+  standard ANSI colour; a plain serial monitor shows it like any terminal, and a
+  theme-aware viewer (e.g. TraceView) remaps the basic colours to its own
+  palette. Gated by the compile flag **`TINYSHELL_COLOR`** (default off → not a
+  single extra byte on the wire, output identical to 1.1.0).
+  `TinyShell`'s own framework messages (validation errors, run summaries, help
+  dumps) route through it automatically. See
+  [Output colouring](#output-colouring-shellstyle).
+- Smoke test: `test/test_shell_style.cpp` — compile it **both** ways:
+  `g++ -std=gnu++17 -I. ShellStyle.cpp test/test_shell_style.cpp -o ss && ./ss`
+  and again with `-DTINYSHELL_COLOR`.
 
 ### What's New in 1.1.0
 
@@ -121,6 +137,58 @@ A few notes:
 | `MAX_RENDER_COLUMNS` | `72` | render width; longer lines scroll |
 | `MAX_TAB_SUGGESTIONS` | `24` | completions offered per Tab cycle |
 | `MAX_PENDING_INPUT` | `4096` | un-polled `feed()` backlog cap |
+
+---
+
+## Output colouring (`ShellStyle`)
+
+`ShellStyle` turns an output line into a **semantic class** and, when the
+compile flag `TINYSHELL_COLOR` is defined, wraps it in a standard ANSI SGR
+sequence. It is framework-free (only `<string>`/`<cstdint>`) and has no
+dependency on `TinyShell` or `ShellLineEditor`.
+
+### Classes and colours
+
+| `ShellMsgClass` | SGR (flag on) | matches |
+| --- | --- | --- |
+| `Output` | *(none)* | anything not matched below |
+| `Success` | `\e[32m` green | `sucesso`/`success`, `enviado`, `ligado`, `pong`, … |
+| `Warning` | `\e[33m` yellow | `aviso(...)`, `warning`, `deprecated`, … |
+| `Error` | `\e[31m` red | `erro(...)`, `falha`, `not found`, `invalid`, … |
+| `Help` | `\e[2m` faint | `[help] …`, `get_help()` dumps |
+| `Muted` | `\e[90m` grey | ESP-NOW `[info]`/`[debug]`/`[telemetry]`/`[cmd]` lines |
+| `Prompt` / `Input` | `\e[36m` / `\e[1m` | reserved for a future `ShellLineEditor` mode |
+
+Keyword matching is bilingual (pt/en) and deliberately conservative — same set
+the calling firmware already uses to colour its LCD.
+
+### API
+
+```cpp
+#include "ShellStyle.h"
+
+ShellMsgClass shell_classify_line(const std::string& line);   // prefix + keyword, idempotent on coloured text
+const char*   shell_sgr(ShellMsgClass);                       // "\x1b[..m"  ("" for Output / flag off)
+const char*   shell_sgr_reset();                              // "\x1b[0m"   ("" when flag off)
+std::string   shell_colorize_block(const std::string& text,   // split lines, classify, wrap, rejoin
+                                   ShellMsgClass fallback = ShellMsgClass::Output);
+```
+
+`shell_colorize_block` keeps the exact line terminators of the input, skips any
+line that already contains an ESC byte, and — with `TINYSHELL_COLOR` **not**
+defined — returns `text` byte-for-byte.
+
+### Integration
+
+`TinyShell` routes its own framework output through `ShellStyle` already:
+`format_shell_response()` calls `shell_colorize_block(text, code == RESULT_OK ?
+Output : Error)`, and the `help -modules` / `help -types` dumps go through it
+with the `Help` fallback. Nothing else is required to get coloured framework
+messages — just build with `-DTINYSHELL_COLOR`.
+
+A host program that captures command output itself (a firmware that feeds the
+result to its own transport) can call `shell_classify_line()` per line to reuse
+the exact same classification for its transport and its display.
 
 ---
 
