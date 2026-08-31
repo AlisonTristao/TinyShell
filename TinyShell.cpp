@@ -1,5 +1,7 @@
 #include <TinyShell.h>
 
+#include <ShellStyle.h>
+
 #include <algorithm>
 #include <cctype>
 
@@ -13,7 +15,11 @@ string format_shell_response(uint8_t code, const string& verbose_text) {
 #elif defined(VERBOSE_OFF)
     return to_string(code) + "\n";
 #else
-    return verbose_text;
+    // A non-zero status makes an otherwise-plain line read as an error; a line
+    // that already carries a keyword/prefix keeps its own class. With
+    // TINYSHELL_COLOR undefined this returns verbose_text byte-for-byte.
+    return shell_colorize_block(verbose_text,
+                                code == RESULT_OK ? ShellMsgClass::Output : ShellMsgClass::Error);
 #endif
 }
 

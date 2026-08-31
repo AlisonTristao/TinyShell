@@ -2,6 +2,7 @@
 #define TINY_SHELL_H
 
 #include <TableLinker/TableLinker.h>
+#include <ShellStyle.h>
 #include <string>
 #include <vector>
 
@@ -115,13 +116,13 @@ class TinyShell {
          * @return return all items inside the module
          */
         string get_help(string module_name = "");
-        uint8_t wrapper_help() { 
-            output_callback(get_help());
-            return RESULT_OK; 
+        uint8_t wrapper_help() {
+            output_callback(shell_colorize_block(get_help(), ShellMsgClass::Help));
+            return RESULT_OK;
         };
-        uint8_t wrapper_help_types() { 
-            output_callback(get_types());
-            return RESULT_OK; 
+        uint8_t wrapper_help_types() {
+            output_callback(shell_colorize_block(get_types(), ShellMsgClass::Help));
+            return RESULT_OK;
         };
 
         /**
