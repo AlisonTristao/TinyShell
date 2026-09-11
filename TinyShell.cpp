@@ -54,8 +54,23 @@ uint8_t TinyShell::run_command_line(string command) {
     ParsedCommand cmd = parse_command(command);
     uint8_t status_code = RESULT_OK;
 
-    // verify if the command is valid
-    string validation_text = validate_command(cmd, status_code);
+    // verify if the command is valid. A bad/incomplete command (e.g. a bare
+    // module name) falls through to get_help(), which concatenates a
+    // std::string per registered command in that module -- on a module with
+    // many commands, under a thin/fragmented heap, that allocation can fail.
+    // Uncaught, that used to abort() the whole process; caught here, it is
+    // just another RESULT_ERROR response, same as a failed call() below.
+    string validation_text;
+    try {
+        validation_text = validate_command(cmd, status_code);
+    } catch (const exception& e) {
+        status_code = RESULT_ERROR;
+        validation_text = string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
+    } catch (...) {
+        status_code = RESULT_ERROR;
+        validation_text = "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
+    }
+
     if (status_code != RESULT_OK) {
         output_callback(format_shell_response(status_code, validation_text));
         return status_code;

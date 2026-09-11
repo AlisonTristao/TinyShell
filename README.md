@@ -2,7 +2,19 @@
 
 ## Version
 
-Current version: **1.4.0**
+Current version: **1.4.1**
+
+### What's New in 1.4.1
+
+`run_command_line()` now catches exceptions thrown while *validating* a
+command, not just while *calling* it. A bare module name (no `-function`)
+falls through to `get_help()`, which builds a help listing by concatenating
+one `std::string` per registered command in that module — on a module with
+many commands, if the host is low on (fragmented) heap, that allocation can
+throw `std::bad_alloc`. Previously that exception was uncaught and unwound
+past `run_command_line()`, aborting the process; it is now caught the same
+way a failed `call()` already was, and surfaces as a normal `RESULT_ERROR`
+response instead of a crash.
 
 ### What's New in 1.4.0
 
