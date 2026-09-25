@@ -1,330 +1,73 @@
 #include "TableLinker.h"
 
-function_manager::~function_manager() {
-    // unique_ptr destroys pointees automatically; we just delete the array
-    delete[] func_array;
-    func_array = nullptr;
-    size = 0;
+namespace {
+
+bool name_equals(const char* stored, std::string_view name) {
+    const std::size_t length = std::strlen(stored);
+    return length == name.size() && std::memcmp(stored, name.data(), length) == 0;
 }
 
-// copy constructor (deep copy)
-function_manager::function_manager(const function_manager& other)
-    : func_array(nullptr), size(other.size) {
-    if (size == 0) return;
+}  // namespace
 
-    // allocate the new array
-    func_array = new unique_ptr<base_function>[size];
-
-    // deep copy each element via virtual clone()
-    for (size_t i = 0; i < size; ++i) {
-        if (other.func_array[i]) {
-            func_array[i] = other.func_array[i]->clone(); // deep copy of the pointee
-        } else {
-            func_array[i] = nullptr;
+TableLinker::~TableLinker() {
+    for (std::size_t i = 0; i < command_count_; ++i) {
+        tinyshell::Command& command = commands_[i];
+        if (command.destroy != nullptr) {
+            command.destroy(command.callable(), command.heap != nullptr);
         }
     }
 }
 
-// copy assignment (copy-and-swap)
-function_manager& function_manager::operator=(const function_manager& other) {
-    if (this == &other) return *this;
-
-    // make a deep-copied temp using the copy ctor
-    function_manager tmp(other);
-
-    // swap members (noexcept)
-    swap(func_array, tmp.func_array);
-    swap(size, tmp.size);
-    return *this;
-}
-
-function_manager::function_manager(size_t size) : size(size) {
-    func_array = (size > 0) ? new unique_ptr<base_function>[size] : nullptr;
-}
-
-void function_manager::resize(size_t new_size) {
-    // allocate new array
-    unique_ptr<base_function>* new_func_array = new unique_ptr<base_function>[new_size];
-
-    // copy the old data
-    size_t copy_size = (new_size < size) ? new_size : size;
-    for (size_t i = 0; i < copy_size; ++i) {
-        new_func_array[i] = func_array[i]->clone(); // deep copy of the pointee
+std::uint8_t TableLinker::create_module(const char* mod_name, const char* mod_description) {
+    if (mod_name == nullptr) return RESULT_ERROR;
+    if (find_module(mod_name) != kNotFound) return MODULE_NOT_FOUND;  // already exists (1.x code)
+    if (module_count_ >= TINYSHELL_MAX_MODULES) {
+        ++dropped_;
+        return TABLE_FULL;
     }
-
-    // delete the old array
-    delete[] func_array;
-
-    // update the pointer and size
-    func_array = new_func_array;
-    size = new_size;
-}
-
-const char** function_manager::get_param_types(string name) {
-    size_t idx = select(name);
-    return get_param_types(idx);
-}
-
-const char** function_manager::get_param_types(size_t idx) {
-    if (check_index(idx)) return nullptr;
-    return func_array[idx]->get_param_types();
-}
-
-size_t function_manager::get_param_size(size_t idx) {
-    if (check_index(idx)) return FUNCTION_NOT_FOUND;
-    return func_array[idx]->get_size();
-}
-
-string function_manager::get_name(size_t idx) {
-    if (check_index(idx)) return "";
-    return func_array[idx]->get_name();
-}
-
-string function_manager::get_description(size_t idx) {
-    if (check_index(idx)) return "";
-    return func_array[idx]->get_description();
-}
-
-string function_manager::get_expected_types_str(string name) {
-    size_t idx = select(name);
-    if (check_index(idx)) return "";
-    return get_expected_types_str(idx);
-}
-
-string function_manager::get_expected_types_str(size_t idx) {
-    if (check_index(idx)) return "";
-    
-    // get the expected types from the function
-    const char** types = func_array[idx]->get_param_types();
-    size_t size_param = func_array[idx]->get_size();
-
-    // concatenate the types into a string
-    string expected_types = "(";
-    for (size_t i = 0; i < size_param; i++) {
-        expected_types += types[i];
-        if (i < (size_param - 1))
-            expected_types += ", ";
-    }
-    expected_types += ")";
-
-    return expected_types;
-}
-
-string function_manager::get_all() {
-    string text = "\n";
-    for (size_t i = 0; i < size; i++)
-        text += "-" + func_array[i]->get_name() + " " + get_expected_types_str(i) + " => " + func_array[i]->get_description() + "\n";
-    return text.empty() ? "no functions available.\n" : text;
-}
-
-bool function_manager::check_index(size_t idx) {
-    return (idx >= size);
-}
-
-bool function_manager::check_name(string name) {
-    size_t idx = select(name);
-    return !check_index(idx);
-}
-
-uint8_t function_manager::call(size_t idx, void** args) {
-    // check the item index
-    if (check_index(idx)) return FUNCTION_NOT_FOUND;
-
-    // call the function and return the result
-    return func_array[idx]->call(args);
-}
-
-uint8_t function_manager::call(size_t idx) {
-    return call(idx, nullptr);
-}
-
-uint8_t function_manager::call(string name, void** args) {
-    size_t idx = select(name);
-    if (check_index(idx)) return FUNCTION_NOT_FOUND;
-    return call(idx, args);
-}
-
-size_t function_manager::select(string name) {
-    for (size_t i = 0; i < size; i++)
-        if (func_array[i]->get_name() == name)
-            return i;
-    return -1;
-}
-
-bool function_manager::check_expected_types(string name, size_t receive) {
-    size_t idx = select(name);
-    if (check_index(idx)) return false; // Function not found
-    return (receive == func_array[idx]->get_size());
-}
-
-TableLinker::TableLinker(size_t table_size) : size(table_size) {
-    if (size == 0) {
-        commands_array = nullptr;
-        module_name = nullptr;
-        module_description = nullptr;
-        return;
-    }
-    commands_array = new function_manager[size];
-    module_name = new string[size];
-    module_description = new string[size];
-}
-
-TableLinker::~TableLinker() {
-    delete[] commands_array;
-    delete[] module_name;
-    delete[] module_description;
-}
-
-void TableLinker::resize(size_t new_size) {
-    // alocate new arrays
-    function_manager* new_commands = new function_manager[new_size];
-    string* new_names = new string[new_size];
-    string* new_descriptions = new string[new_size];
-
-    // copy the old data
-    size_t copy_size = (new_size < size) ? new_size : size;
-    for (size_t i = 0; i < copy_size; ++i) {
-        new_commands[i] = commands_array[i];
-        new_names[i] = module_name[i];
-        new_descriptions[i] = module_description[i];
-    }
-
-    // liberate the memory of the old arrays
-    delete[] commands_array;
-    delete[] module_name;
-    delete[] module_description;
-
-    // update the pointers and the new size
-    commands_array = new_commands;
-    module_name = new_names;
-    module_description = new_descriptions;
-    size = new_size;
-}
-
-uint8_t TableLinker::create_module(string mod_name, string mod_description) {
-    // check if the module already exists
-    if (check_module_name(mod_name)) return MODULE_NOT_FOUND; // Module already exists
-    // find the next available index
-    return create_module(size, mod_name, mod_description);
-}
-
-string TableLinker::get_all_module(string name) {
-    size_t idx = select_module(name);
-    return get_all_module(idx);
-}
-
-string TableLinker::get_all() {
-    string text = "";
-    for (size_t i = 0; i < size; i++)
-        text += module_name[i] + " => " + module_description[i] + "\n";
-    return text.empty() ? "no modules available.\n" : text;
-}
-
-size_t TableLinker::module_count() const {
-    return size;
-}
-
-string TableLinker::module_name_at(size_t idx) const {
-    if (idx >= size) {
-        return "";
-    }
-
-    return module_name[idx];
-}
-
-size_t TableLinker::function_count(string module_name) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) {
-        return 0;
-    }
-
-    return commands_array[mod_idx].count();
-}
-
-string TableLinker::function_name_at(string module_name, size_t idx) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) {
-        return "";
-    }
-
-    return commands_array[mod_idx].get_name(idx);
-}
-
-uint8_t TableLinker::call(string module_name, string func_name) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
-    return commands_array[mod_idx].call(func_name);
-}
-
-uint8_t TableLinker::create_module(size_t idx, string mod_name, string mod_description) {
-    // resize the array if necessary
-    if (idx == size) resize(size + 1);
-
-    if (check_index(idx)) return MODULE_NOT_FOUND; // index out of bounds
-
-    // set the module name and description
-    module_name[idx] = mod_name;
-    module_description[idx] = mod_description;
+    modules_[module_count_].name = mod_name;
+    modules_[module_count_].description = mod_description != nullptr ? mod_description : "";
+    ++module_count_;
     return RESULT_OK;
 }
 
-uint8_t TableLinker::call(string module_name, string func_name, void** args) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return MODULE_NOT_FOUND; // Module not found
-    return commands_array[mod_idx].call(func_name, args);
+std::uint8_t TableLinker::create_module(const std::string& mod_name,
+                                        const std::string& mod_description) {
+    if (find_module(mod_name) != kNotFound) return MODULE_NOT_FOUND;
+    const char* name = intern(mod_name);
+    const char* description = intern(mod_description);
+    if (name == nullptr || description == nullptr) {
+        ++dropped_;
+        return TABLE_FULL;
+    }
+    return create_module(name, description);
 }
 
-bool TableLinker::check_module_name(string name) {
-    size_t idx = select_module(name);
-    return !check_index(idx);
+std::size_t TableLinker::find_module(std::string_view name) const noexcept {
+    for (std::size_t i = 0; i < module_count_; ++i) {
+        if (name_equals(modules_[i].name, name)) return i;
+    }
+    return kNotFound;
 }
 
-bool TableLinker::check_index(size_t idx) {
-    return (idx >= size);
+std::size_t TableLinker::find_command(std::size_t module, std::string_view name) const noexcept {
+    for (std::size_t i = 0; i < command_count_; ++i) {
+        if (commands_[i].module == module && name_equals(commands_[i].name, name)) return i;
+    }
+    return kNotFound;
 }
 
-size_t TableLinker::select(string name) {
-    for (size_t i = 0; i < size; i++)
-        if (commands_array[i].get_name(i) == name)
-            return i;
-    return RESULT_ERROR;
+std::uint8_t TableLinker::call(std::size_t idx, char* const* argv, tinyshell::ConvError* error) {
+    if (idx >= command_count_) return FUNCTION_NOT_FOUND;
+    tinyshell::Command& command = commands_[idx];
+    return command.invoke(command.callable(), argv, error);
 }
 
-size_t TableLinker::select_module(string name) {
-    for (size_t i = 0; i < size; i++)
-        if (module_name[i] == name)
-            return i;
-    return RESULT_ERROR;
-}
-
-string TableLinker::get_all_module(size_t idx) {
-    if (check_index(idx)) return "module not found.\n";
-    string text =   module_name[idx] + ": " +
-                    module_description[idx] + "\n" + 
-                    commands_array[idx].get_all();
-    return text;
-}
-
-bool TableLinker::check_function_name(string module_name, string func_name) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return false; // Module not found
-    return commands_array[mod_idx].check_name(func_name);
-}
-
-string TableLinker::get_expected_types_str(string module_name, string func_name) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return ""; // Module not found
-    return commands_array[mod_idx].get_expected_types_str(func_name);
-}
-
-const char** TableLinker::get_param_types(string module_name, string func_name) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return nullptr; // Module not found
-    return commands_array[mod_idx].get_param_types(func_name);
-}
-
-bool TableLinker::check_expected_types(string module_name, string func_name, size_t receive) {
-    size_t mod_idx = select_module(module_name);
-    if (check_index(mod_idx)) return false; // Module not found
-    return commands_array[mod_idx].check_expected_types(func_name, receive);
+const char* TableLinker::intern(const std::string& text) {
+    const std::size_t needed = text.size() + 1U;
+    if (names_used_ + needed > sizeof(names_)) return nullptr;
+    char* slot = names_ + names_used_;
+    std::memcpy(slot, text.c_str(), needed);
+    names_used_ += needed;
+    return slot;
 }

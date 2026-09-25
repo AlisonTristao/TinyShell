@@ -2,7 +2,60 @@
 
 ## Version
 
-Current version: **1.4.1**
+Current version: **2.0.0**
+
+### What's New in 2.0.0
+
+The core no longer allocates to register or run a command. 1.x was fine on an
+ESP32 with a roomy heap but fragmented it at boot and allocated on every
+command -- the wrong shape for a smaller microcontroller.
+
+| | 1.x | 2.0.0 |
+| --- | --- | --- |
+| registering a command | grew the table by one and deep-copied **every** command already there (O(n²) allocations) | fixed-capacity table, nothing copied |
+| names / descriptions | copied into `std::string`s | pointers to your string literals |
+| a command's callable | `std::function` + a heap-allocated wrapper | inline slot (`TINYSHELL_CALLABLE_STORAGE`); only an oversized capture costs one allocation, once |
+| running a line | several `std::string` copies, `new void*[]`, one `new T` per argument | parsed in place in a stack buffer, arguments converted straight into a stack tuple |
+| bad input | exceptions as control flow | error codes; builds with `-fno-exceptions` |
+| output | the whole response built as one `std::string` (a big help dump could fail to allocate -- the 1.4.1 crash) | a fixed stack buffer flushed to the callback in whole-line chunks |
+
+What stays the same: `begin()`, `add(func, name, description, module)`,
+`create_module()`, `run_command_line()`, `complete_line()`,
+`set_output_callback()`, the `module -command a, b, c` syntax (`\,` for a
+literal comma), the result codes and every message text.
+
+What to know when upgrading:
+
+- **Capacities are compile-time** (`-D` build flags): `TINYSHELL_MAX_MODULES`
+  (32), `TINYSHELL_MAX_COMMANDS` (160, total), `TINYSHELL_MAX_ARGS` (8),
+  `TINYSHELL_MAX_LINE` (512 -- also the per-call stack cost),
+  `TINYSHELL_OUTPUT_CAPACITY` (256), `TINYSHELL_CALLABLE_STORAGE`
+  (4 pointers), `TINYSHELL_NAME_ARENA` (256). A registration past a limit
+  returns `TABLE_FULL`, is counted by `dropped_registrations()` and is
+  reported by `help -modules`.
+- **Names are not copied**: pass string literals (anything that outlives the
+  shell). The `std::string` overloads of `add()` / `create_module()` copy
+  into the fixed name arena instead.
+- **Zero-copy parameters**: a command may take `std::string_view` or
+  `const char*`, pointing straight into the parsed line (valid while the
+  command runs). `std::string` still works and allocates only past its
+  small-buffer size. Integer parameters are matched by size and sign, so
+  `int`, `long` and `int32_t` (a `long` on ESP-IDF 5) all work.
+- **Output callback**: one taking `std::string_view` gets the buffer as-is;
+  the 1.x `const std::string&` shape still works at one `std::string` per
+  call. A long response now arrives as several calls, each ending on a line
+  boundary.
+- **Custom parameter types**: specialize `tinyshell::ArgType<T>` (see
+  `TableLinker/UserTypeConverters.h`); the 1.x `convert_type_custom()` hooks
+  are gone.
+- `using namespace std;` is still injected by `TinyShell.h` for
+  compatibility, but deprecated: define `TINYSHELL_NO_USING_NAMESPACE_STD`.
+- `TinyShell` is no longer copyable, and a second command with the same name in
+  one module is refused (`RESULT_ERROR`) instead of silently shadowed.
+- Test: `test/test_tinyshell.cpp` counts allocations through a global
+  `operator new` to check the promise above --
+  `g++ -std=gnu++17 -I. TinyShell.cpp TableLinker/TableLinker.cpp ShellStyle.cpp test/test_tinyshell.cpp -o ts && ./ts`
+  (also with `-DTINYSHELL_COLOR`, `-DVERBOSE_OFF`, `-fno-exceptions`).
 
 ### What's New in 1.4.1
 

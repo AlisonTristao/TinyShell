@@ -32,16 +32,6 @@ TinyShell ts;
     */
 
 // wrapper functions to be used in the shell
-uint8_t wrapper_h() {
-    Serial.println(ts.get_help("").c_str());
-    return RESULT_OK;  // return 0 to indicate success
-}
-
-uint8_t wrapper_l(string module = "") {
-    Serial.println(ts.get_help(module).c_str());
-    return RESULT_OK;  // return 0 to indicate success
-}
-
 uint8_t wrapper_e() {
     // explain the command usage
     Serial.println("Usage: <module> -<command> [args]");
@@ -76,17 +66,23 @@ void setup() {
     Serial.begin(921600);
     delay(1000);
 
+    // every response the shell produces goes here -- a std::string_view
+    // straight out of the shell's own buffer, no copy
+    ts.set_output_callback([](std::string_view text) {
+        Serial.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+    });
+
+    // registers the built-in "help" module: help -modules, help -types
+    ts.begin();
+
     // create the modules
     ts.create_module("teste", "Funcoes de teste com texto");
-    ts.create_module("help", "ajuda e informacoes");
 
     // add the functions to the modules
     ts.add(teste_1, "t1", "Teste de funcao com 3 parametros", "teste");
     ts.add(teste_2, "t2", "Teste de funcao com 3 parametros", "teste");
 
-    // add the wrapper functions to the help module
-    ts.add(wrapper_h, "h", "Lista os modulos", "help");
-    ts.add(wrapper_l, "l", "Lista as funcoes de um modulo", "help");
+    // add the wrapper function to the (built-in) help module
     ts.add(wrapper_e, "e", "Explica o uso do comando", "help");
 }
 
@@ -123,11 +119,11 @@ void loop() {
 
             Serial.println("Received command: " + commandBuffer);
 
-            // run the command in the shell
-            string response = ts.run_command_line(commandBuffer.c_str());
-
-            delay(100);  // give some time for the shell to process the command
-            Serial.println(String(response.c_str()));
+            // run the command in the shell; its messages arrive through the
+            // output callback above, the return value is the status code
+            const uint8_t status = ts.run_command_line(commandBuffer.c_str());
+            Serial.print("status: ");
+            Serial.println(status);
 
             commandBuffer = "";
         } else {

@@ -1,36 +1,33 @@
 #ifndef USER_TYPE_CONVERTERS_H
 #define USER_TYPE_CONVERTERS_H
 
-#include <string>
-
-// This file is intentionally user-editable.
-// Implement custom type conversions here without changing the core TableLinker logic.
+// This file is intentionally user-editable: teach TinyShell a new command
+// parameter type by specializing tinyshell::ArgType<T> here (or anywhere that
+// is visible before the command using it is registered).
 //
-// Conversion contract:
-// - Return true if this function handled the type_code.
-// - On success, set out_ptr to a heap-allocated object compatible with the target function type.
-// - On handled failure, set error_msg with details and keep out_ptr as nullptr.
-// - Return false when type_code is unknown to your custom converter.
+// Contract (see TypeConversion.h):
+//   - `code` is the short type name the help listing shows;
+//   - parse() receives the argument already trimmed, unescaped and
+//     NUL-terminated, valid only while the command runs;
+//   - return false on bad input, optionally pointing `error` at a static
+//     reason string; never allocate for its own sake, never throw.
 //
-// Destroy contract:
-// - Return true if this function handled type_code and released ptr.
-// - Return false when type_code is unknown here.
-namespace TinyShellUserConverters {
+// Example -- a 2D point typed as "x;y":
+//
+//   struct Point { float x, y; };
+//
+//   template <>
+//   struct tinyshell::ArgType<Point> {
+//       static constexpr const char* code = "pt";
+//       static bool parse(const char* token, Point& out, const char*& error) {
+//           const char* sep = std::strchr(token, ';');
+//           if (sep == nullptr) { error = "expected x;y"; return false; }
+//           out.x = std::strtof(token, nullptr);
+//           out.y = std::strtof(sep + 1, nullptr);
+//           return true;
+//       }
+//   };
+//
+//   shell.add([](Point p) -> uint8_t { ... }, "goto", "Move to x;y", "motion");
 
-inline bool convert_type_custom(const char* data, const char* type_code, void*& out_ptr, std::string& error_msg) {
-    (void)data;
-    (void)type_code;
-    out_ptr = nullptr;
-    error_msg.clear();
-    return false;
-}
-
-inline bool destroy_type_custom(void* ptr, const char* type_code) {
-    (void)ptr;
-    (void)type_code;
-    return false;
-}
-
-} // namespace TinyShellUserConverters
-
-#endif // USER_TYPE_CONVERTERS_H
+#endif  // USER_TYPE_CONVERTERS_H

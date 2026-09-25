@@ -2,424 +2,457 @@
 
 #include <ShellStyle.h>
 
-#include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstring>
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+#include <exception>
+#define TINYSHELL_CATCH_EXCEPTIONS 1
+#endif
+
+// Collects text in a fixed stack buffer and hands it to the output callback in
+// chunks of whole lines -- a buffer that fills up flushes through its last
+// newline, so one line is never split across two callback calls unless it is
+// longer than the whole buffer on its own.
+class TinyShell::Writer {
+public:
+    Writer(TinyShell& shell, ShellMsgClass msg_class, bool discard = false)
+        : shell_(shell), class_(msg_class), discard_(discard) {}
+    Writer(const Writer&) = delete;
+    Writer& operator=(const Writer&) = delete;
+    ~Writer() { flush(); }
+
+    void put(char c) {
+        if (discard_) return;
+        if (length_ == sizeof(buffer_)) drain();
+        buffer_[length_++] = c;
+    }
+
+    void put(std::string_view text) {
+        for (char c : text) put(c);
+    }
+
+    void put(const char* text) { put(std::string_view(text != nullptr ? text : "")); }
+
+    void put_number(unsigned long value) {
+        char digits[24];
+        const int n = std::snprintf(digits, sizeof(digits), "%lu", value);
+        if (n > 0) put(std::string_view(digits, static_cast<std::size_t>(n)));
+    }
+
+    void flush() {
+        if (length_ != 0) shell_.emit(std::string_view(buffer_, length_), class_);
+        length_ = 0;
+    }
+
+private:
+    // Buffer full: emit up to and including its last newline, keep the rest.
+    void drain() {
+        std::size_t cut = length_;
+        while (cut > 0 && buffer_[cut - 1] != '\n') --cut;
+        if (cut == 0) cut = length_;  // one line longer than the buffer
+        shell_.emit(std::string_view(buffer_, cut), class_);
+        std::memmove(buffer_, buffer_ + cut, length_ - cut);
+        length_ -= cut;
+    }
+
+    TinyShell& shell_;
+    ShellMsgClass class_;
+    bool discard_;
+    char buffer_[TINYSHELL_OUTPUT_CAPACITY];
+    std::size_t length_ = 0;
+};
 
 namespace {
 
-string format_shell_response(uint8_t code, const string& verbose_text) {
-#if defined(HARD_VERBOSE_OFF)
-    (void)code;
-    (void)verbose_text;
-    return "";
-#elif defined(VERBOSE_OFF)
-    return to_string(code) + "\n";
+// The status line / verbosity rules every response goes through. A non-zero
+// status makes an otherwise-plain line read as an error; a line that already
+// carries a keyword/prefix keeps its own class (ShellStyle).
+[[maybe_unused]] ShellMsgClass response_class(std::uint8_t code) {
+    return code == RESULT_OK ? ShellMsgClass::Output : ShellMsgClass::Error;
+}
+
+constexpr bool response_text_enabled() {
+#if defined(HARD_VERBOSE_OFF) || defined(VERBOSE_OFF)
+    return false;
 #else
-    // A non-zero status makes an otherwise-plain line read as an error; a line
-    // that already carries a keyword/prefix keeps its own class. With
-    // TINYSHELL_COLOR undefined this returns verbose_text byte-for-byte.
-    return shell_colorize_block(verbose_text,
-                                code == RESULT_OK ? ShellMsgClass::Output : ShellMsgClass::Error);
+    return true;
 #endif
 }
 
-string trim_copy(const string& text) {
-    const auto first = find_if_not(text.begin(), text.end(), [](unsigned char ch) {
-        return isspace(ch) != 0;
-    });
-
-    if (first == text.end()) {
-        return "";
+// `\` escapes the next character, so `\,` is not a separator.
+std::size_t find_next_unescaped_comma(const char* text, std::size_t length, std::size_t start) {
+    bool escaped = false;
+    for (std::size_t i = start; i < length; ++i) {
+        if (escaped) {
+            escaped = false;
+        } else if (text[i] == '\\') {
+            escaped = true;
+        } else if (text[i] == ',') {
+            return i;
+        }
     }
-
-    const auto last = find_if_not(text.rbegin(), text.rend(), [](unsigned char ch) {
-        return isspace(ch) != 0;
-    }).base();
-
-    return string(first, last);
+    return length;
 }
 
-bool starts_with(const string& text, const string& prefix) {
-    if (prefix.length() > text.length()) {
-        return false;
+std::size_t count_unescaped_commas(const char* text, std::size_t length) {
+    std::size_t count = 0;
+    for (std::size_t pos = find_next_unescaped_comma(text, length, 0); pos < length;
+         pos = find_next_unescaped_comma(text, length, pos + 1)) {
+        ++count;
     }
-
-    return equal(prefix.begin(), prefix.end(), text.begin());
+    return count;
 }
 
-} // namespace
-
-uint8_t TinyShell::run_command_line(string command) {
-    // remove leading and trailing whitespace
-    ParsedCommand cmd = parse_command(command);
-    uint8_t status_code = RESULT_OK;
-
-    // verify if the command is valid. A bad/incomplete command (e.g. a bare
-    // module name) falls through to get_help(), which concatenates a
-    // std::string per registered command in that module -- on a module with
-    // many commands, under a thin/fragmented heap, that allocation can fail.
-    // Uncaught, that used to abort() the whole process; caught here, it is
-    // just another RESULT_ERROR response, same as a failed call() below.
-    string validation_text;
-    try {
-        validation_text = validate_command(cmd, status_code);
-    } catch (const exception& e) {
-        status_code = RESULT_ERROR;
-        validation_text = string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
-    } catch (...) {
-        status_code = RESULT_ERROR;
-        validation_text = "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
+// `\,` -> `,` and `\\` -> `\`; any other escape stays as written. In place,
+// returns the new length.
+std::size_t unescape_in_place(char* text, std::size_t length) {
+    std::size_t out = 0;
+    for (std::size_t i = 0; i < length; ++i) {
+        if (text[i] == '\\' && i + 1 < length && (text[i + 1] == ',' || text[i + 1] == '\\')) {
+            text[out++] = text[++i];
+        } else {
+            text[out++] = text[i];
+        }
     }
+    return out;
+}
 
-    if (status_code != RESULT_OK) {
-        output_callback(format_shell_response(status_code, validation_text));
-        return status_code;
+std::string_view trim_view(std::string_view text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) {
+        text.remove_prefix(1);
     }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
 
-    const char** types = table_linker.get_param_types(cmd.module_name, cmd.command_name);
-    string result_text;
-    void** args = nullptr;
+bool starts_with(std::string_view text, std::string_view prefix) {
+    return text.substr(0, prefix.size()) == prefix;
+}
 
-    args = convert_args(cmd, types, result_text);
+}  // namespace
 
-    // if the args conversion failed, keep RESULT_ERROR and skip execution
-    if (!result_text.empty()) {
-        status_code = RESULT_ERROR;
+void TinyShell::begin() {
+    create_module("help", "Help module for listing available commands");
+    add([this]() { return wrapper_help(); }, "modules", "Description", "help");
+    add([this]() { return wrapper_help_types(); }, "types", "Description", "help");
+}
+
+void TinyShell::emit(std::string_view chunk, ShellMsgClass msg_class) {
+    if (chunk.empty() || !output_callback) return;
+    if constexpr (shell_color_enabled()) {
+        const std::string colored = shell_colorize_block(chunk, msg_class);
+        output_callback(colored);
     } else {
-        try {
-            status_code = call(cmd.module_name, cmd.command_name, args);
-
-            if (status_code != RESULT_OK) {
-                result_text = "Comando '" + cmd.command_name + "' do modulo '" + cmd.module_name + "' falhou com codigo de erro: " + to_string(status_code) + ".\n";
-            } else {
-                result_text = "Comando '" + cmd.command_name + "' do modulo '" + cmd.module_name + "' executado com sucesso.\n";
-            }
-        } catch (const exception& e) {
-            status_code = RESULT_ERROR;
-            result_text = string(e.what()) + " " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
-        } catch (...) {
-            status_code = RESULT_ERROR;
-            result_text = "Unknown error occurred in " + string(__FUNCTION__) + " " + string(__FILE__) + ":" + to_string(__LINE__);
-        }
+        (void)msg_class;
+        output_callback(chunk);
     }
-
-    // clean up converted arguments
-    if (args != nullptr && types != nullptr) {
-        for (size_t i = 0; i < cmd.args_count; ++i) {
-            destroy_type_char(args[i], types[i]);
-        }
-    }
-
-    // clean up the pointer array
-    delete[] args;
-
-    // return the result of the command execution
-    output_callback(format_shell_response(status_code, result_text));
-    return status_code;
 }
 
-vector<string> TinyShell::complete_line(const string& partial_command, size_t max_results) {
-    vector<string> completions;
+void TinyShell::write_module_list(Writer& out) {
+    if (table_linker.module_count() == 0) {
+        out.put("no modules available.\n");
+        return;
+    }
+    for (std::size_t i = 0; i < table_linker.module_count(); ++i) {
+        const tinyshell::Module& module = table_linker.module_at(i);
+        out.put(module.name);
+        out.put(" => ");
+        out.put(module.description);
+        out.put('\n');
+    }
+}
+
+void TinyShell::write_types(Writer& out, const tinyshell::Command& command) {
+    out.put('(');
+    for (std::size_t i = 0; i < command.arity; ++i) {
+        if (i != 0) out.put(", ");
+        out.put(command.types[i]);
+    }
+    out.put(')');
+}
+
+void TinyShell::write_module_help(Writer& out, std::size_t module) {
+    const tinyshell::Module& entry = table_linker.module_at(module);
+    out.put(entry.name);
+    out.put(": ");
+    out.put(entry.description);
+    out.put("\n\n");
+    for (std::size_t i = 0; i < table_linker.command_count(); ++i) {
+        const tinyshell::Command& command = table_linker.command_at(i);
+        if (command.module != module) continue;
+        out.put('-');
+        out.put(command.name);
+        out.put(' ');
+        write_types(out, command);
+        out.put(" => ");
+        out.put(command.description);
+        out.put('\n');
+    }
+}
+
+std::uint8_t TinyShell::wrapper_help() {
+    Writer out(*this, ShellMsgClass::Help);
+    write_module_list(out);
+    if (table_linker.dropped_registrations() != 0) {
+        out.put("warning: ");
+        out.put_number(static_cast<unsigned long>(table_linker.dropped_registrations()));
+        out.put(" registration(s) dropped -- raise TINYSHELL_MAX_MODULES / TINYSHELL_MAX_COMMANDS\n");
+    }
+    return RESULT_OK;
+}
+
+std::uint8_t TinyShell::wrapper_help_types() {
+    Writer out(*this, ShellMsgClass::Help);
+    out.put(get_types());
+    return RESULT_OK;
+}
+
+std::uint8_t TinyShell::run_command_line(std::string_view command) {
+    std::uint8_t status = RESULT_OK;
+
+    // Every exit goes through here: the status line, verbosity rules applied.
+    const auto respond = [this, &status](auto&& write_text) {
+#if !defined(HARD_VERBOSE_OFF)
+        Writer out(*this, response_class(status), !response_text_enabled());
+        write_text(out);
+        out.flush();
+#if defined(VERBOSE_OFF)
+        Writer code(*this, response_class(status));
+        code.put_number(status);
+        code.put('\n');
+#endif
+#else
+        (void)write_text;
+#endif
+        return status;
+    };
+
+    if (command.size() > TINYSHELL_MAX_LINE) {
+        status = RESULT_ERROR;
+        return respond([&](Writer& out) {
+            out.put("Command line too long (");
+            out.put_number(static_cast<unsigned long>(command.size()));
+            out.put(" characters, max ");
+            out.put_number(static_cast<unsigned long>(TINYSHELL_MAX_LINE));
+            out.put(").\n");
+        });
+    }
+
+    // Tokenized in place, in this call's own copy: arguments become
+    // NUL-terminated slices of it, which is what lets a string_view / const
+    // char* parameter point straight at its text.
+    char line[TINYSHELL_MAX_LINE + 1];
+    std::memcpy(line, command.data(), command.size());
+    line[command.size()] = '\0';
+    const std::string_view text(line, command.size());
+
+    // Split the same way 1.x did: the module is everything up to the first
+    // space; the command name starts after the first '-' and runs to the next
+    // space; whatever follows that space is the comma-separated argument list.
+    const std::size_t first_space = text.find(' ');
+    const std::string_view module_name = text.substr(0, first_space);
+    std::string_view command_name;
+    char* args = nullptr;
+    std::size_t args_length = 0;
+    std::size_t args_count = 0;
+    const std::size_t dash = text.find('-');
+    if (dash != std::string_view::npos) {
+        std::size_t name_end = text.find(' ', dash);
+        if (name_end == std::string_view::npos) name_end = text.size();
+        command_name = text.substr(dash + 1, name_end - dash - 1);
+        if (name_end < text.size()) {
+            args = line + name_end + 1;
+            args_length = text.size() - name_end - 1;
+            args_count = args_length == 0 ? 0 : 1 + count_unescaped_commas(args, args_length);
+        }
+    }
+
+    const std::size_t module = table_linker.find_module(module_name);
+    if (module == TableLinker::kNotFound) {
+        status = MODULE_NOT_FOUND;
+        return respond([&](Writer& out) {
+            out.put("Module '");
+            out.put(module_name);
+            out.put("' not found.\n\n");
+            write_module_list(out);
+        });
+    }
+
+    const std::size_t index = table_linker.find_command(module, command_name);
+    if (index == TableLinker::kNotFound) {
+        status = FUNCTION_NOT_FOUND;
+        return respond([&](Writer& out) {
+            out.put("Command '");
+            out.put(command_name);
+            out.put("' not found in module '");
+            out.put(module_name);
+            out.put("'\n\n");
+            write_module_help(out, module);
+        });
+    }
+
+    const tinyshell::Command& entry = table_linker.command_at(index);
+    if (args_count != entry.arity) {
+        status = RESULT_ERROR;
+        return respond([&](Writer& out) {
+            out.put("Falha ao converter os tipos, a funcao espera => ");
+            write_types(out, entry);
+            out.put('\n');
+        });
+    }
+
+    char* argv[TINYSHELL_MAX_ARGS > 0 ? TINYSHELL_MAX_ARGS : 1] = {};
+    std::size_t pos = 0;
+    for (std::size_t i = 0; i < args_count; ++i) {
+        const std::size_t next = find_next_unescaped_comma(args, args_length, pos);
+        char* token = args + pos;
+        std::size_t length = next - pos;
+        while (length != 0 && token[0] == ' ') {
+            ++token;
+            --length;
+        }
+        while (length != 0 && token[length - 1] == ' ') --length;
+        length = unescape_in_place(token, length);
+        token[length] = '\0';  // at most the separator's own slot
+        argv[i] = token;
+        pos = next + 1;
+    }
+
+    tinyshell::ConvError conversion;
+#if defined(TINYSHELL_CATCH_EXCEPTIONS)
+    const char* thrown = nullptr;
+    try {
+        status = table_linker.call(index, argv, &conversion);
+    } catch (const std::exception& e) {
+        status = RESULT_ERROR;
+        thrown = e.what();
+    } catch (...) {
+        status = RESULT_ERROR;
+        thrown = "unknown exception";
+    }
+    if (thrown != nullptr) {
+        return respond([&](Writer& out) {
+            out.put(thrown);
+            out.put(" (command '");
+            out.put(command_name);
+            out.put("' of module '");
+            out.put(module_name);
+            out.put("')\n");
+        });
+    }
+#else
+    status = table_linker.call(index, argv, &conversion);
+#endif
+
+    if (conversion.detail != nullptr) {
+        status = RESULT_ERROR;
+        const char* code = entry.types[conversion.index];
+        return respond([&](Writer& out) {
+            out.put("Error converting argument '");
+            out.put(argv[conversion.index]);
+            out.put("' to type '");
+            out.put(code);
+            out.put("': Conversion failed for type '");
+            out.put(code);
+            out.put("': ");
+            out.put(conversion.detail);
+        });
+    }
+
+    return respond([&](Writer& out) {
+        out.put("Comando '");
+        out.put(command_name);
+        out.put("' do modulo '");
+        out.put(module_name);
+        if (status != RESULT_OK) {
+            out.put("' falhou com codigo de erro: ");
+            out.put_number(status);
+            out.put(".\n");
+        } else {
+            out.put("' executado com sucesso.\n");
+        }
+    });
+}
+
+std::vector<std::string> TinyShell::complete_line(std::string_view partial_command,
+                                                  std::size_t max_results) {
+    std::vector<std::string> completions;
     if (max_results == 0) {
         return completions;
     }
 
-    const auto push_completion = [&](const string& candidate) {
-        if (candidate.empty()) {
-            return;
+    const auto push_completion = [&](std::string candidate) {
+        for (const std::string& existing : completions) {
+            if (existing == candidate) return;
         }
-
-        const bool already_added = find(completions.begin(), completions.end(), candidate) != completions.end();
-        if (!already_added && completions.size() < max_results) {
-            completions.push_back(candidate);
-        }
+        if (completions.size() < max_results) completions.push_back(std::move(candidate));
     };
 
-    const auto complete_modules = [&](const string& module_prefix) {
-        const size_t module_total = table_linker.module_count();
-        for (size_t i = 0; i < module_total && completions.size() < max_results; ++i) {
-            const string module_name = table_linker.module_name_at(i);
-            if (module_name.empty()) {
-                continue;
-            }
-
-            if (starts_with(module_name, module_prefix)) {
-                push_completion(module_name + " ");
+    const auto complete_modules = [&](std::string_view prefix) {
+        for (std::size_t i = 0; i < table_linker.module_count() && completions.size() < max_results;
+             ++i) {
+            const std::string_view name = table_linker.module_at(i).name;
+            if (!name.empty() && starts_with(name, prefix)) {
+                push_completion(std::string(name) + " ");
             }
         }
     };
 
-    const auto complete_commands = [&](const string& module_name, const string& command_prefix) {
-        const size_t command_total = table_linker.function_count(module_name);
-        for (size_t i = 0; i < command_total && completions.size() < max_results; ++i) {
-            const string command_name = table_linker.function_name_at(module_name, i);
-            if (command_name.empty()) {
-                continue;
-            }
-
-            if (starts_with(command_name, command_prefix)) {
-                push_completion(module_name + " -" + command_name + " ");
+    const auto complete_commands = [&](std::size_t module, std::string_view prefix) {
+        const std::string_view module_name = table_linker.module_at(module).name;
+        for (std::size_t i = 0;
+             i < table_linker.command_count() && completions.size() < max_results; ++i) {
+            const tinyshell::Command& command = table_linker.command_at(i);
+            if (command.module != module) continue;
+            const std::string_view name = command.name;
+            if (!name.empty() && starts_with(name, prefix)) {
+                std::string candidate(module_name);
+                candidate += " -";
+                candidate += name;
+                candidate += ' ';
+                push_completion(std::move(candidate));
             }
         }
     };
 
-    const string input = trim_copy(partial_command);
+    const std::string_view input = trim_view(partial_command);
     if (input.empty()) {
         complete_modules("");
         return completions;
     }
 
-    const size_t first_space = input.find(' ');
-    if (first_space == string::npos) {
+    const std::size_t first_space = input.find(' ');
+    if (first_space == std::string_view::npos) {
         complete_modules(input);
         return completions;
     }
 
-    const string module_part = trim_copy(input.substr(0, first_space));
-    const string rest = trim_copy(input.substr(first_space + 1));
-
+    const std::string_view module_part = trim_view(input.substr(0, first_space));
+    const std::string_view rest = trim_view(input.substr(first_space + 1));
     if (module_part.empty()) {
         complete_modules("");
         return completions;
     }
 
-    if (!check_module_name(module_part)) {
+    const std::size_t module = table_linker.find_module(module_part);
+    if (module == TableLinker::kNotFound) {
         complete_modules(module_part);
         return completions;
     }
-
     if (rest.empty()) {
-        complete_commands(module_part, "");
+        complete_commands(module, "");
         return completions;
     }
-
     if (rest[0] != '-') {
-        complete_commands(module_part, rest);
+        complete_commands(module, rest);
         return completions;
     }
-
-    const size_t command_end = rest.find(' ', 1);
-    if (command_end != string::npos) {
+    if (rest.find(' ', 1) != std::string_view::npos) {
         return completions;
     }
-
-    const string command_part = rest.substr(1);
-    complete_commands(module_part, command_part);
+    complete_commands(module, rest.substr(1));
     return completions;
-}
-
-size_t count_commas(const string& s) {
-    size_t count = 0;
-    bool escaped = false;
-    for (char c : s) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-
-        if (c == '\\') {
-            escaped = true;
-            continue;
-        }
-
-        if (c == ',') {
-            ++count;
-        }
-    }
-    return count;
-}
-
-size_t find_next_unescaped_comma(const string& s, size_t start_pos) {
-    bool escaped = false;
-    for (size_t i = start_pos; i < s.length(); ++i) {
-        const char c = s[i];
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-
-        if (c == '\\') {
-            escaped = true;
-            continue;
-        }
-
-        if (c == ',') {
-            return i;
-        }
-    }
-
-    return string::npos;
-}
-
-string unescape_commas(const string& text) {
-    string out;
-    out.reserve(text.length());
-
-    bool escaped = false;
-    for (char c : text) {
-        if (escaped) {
-            if (c == ',' || c == '\\') {
-                out.push_back(c);
-            } else {
-                out.push_back('\\');
-                out.push_back(c);
-            }
-            escaped = false;
-            continue;
-        }
-
-        if (c == '\\') {
-            escaped = true;
-            continue;
-        }
-
-        out.push_back(c);
-    }
-
-    if (escaped) {
-        out.push_back('\\');
-    }
-
-    return out;
-}
-
-TinyShell::ParsedCommand TinyShell::parse_command(const string& command) {
-    ParsedCommand result;
-
-    // get the module name
-    size_t space_pos = command.find(' ');
-    result.module_name = (space_pos == string::npos) ? command : command.substr(0, space_pos);
-
-    // verify if the module name is empty
-    size_t command_start = command.find('-');
-    if (command_start == string::npos) {
-        result.command_name = "";
-        result.args_str = "";
-        result.args_count = 0;
-        return result;
-    }
-
-    // find the command name and arguments
-    size_t command_end = command.find(' ', command_start);
-    if (command_end == string::npos) command_end = command.length();
-
-    // extract the command name
-    result.command_name = command.substr(command_start + 1, command_end - command_start - 1);
-
-    if (command_end < command.length()) {
-        result.args_str = command.substr(command_end + 1);
-        result.args_count = result.args_str.empty() ? 0 : 1 + count_commas(result.args_str);
-    } else {
-        result.args_str = "";
-        result.args_count = 0;
-    }
-
-    return result;
-}
-
-string TinyShell::validate_command(const ParsedCommand& cmd, uint8_t& error_code) {
-    error_code = RESULT_OK;
-
-    if (!check_module_name(cmd.module_name)) {
-        error_code = MODULE_NOT_FOUND;
-        return "Module '" + cmd.module_name + "' not found.\n\n" + get_help();
-    }
-
-    if (!check_function_name(cmd.module_name, cmd.command_name)) {
-        error_code = FUNCTION_NOT_FOUND;
-        return "Command '" + cmd.command_name + "' not found in module '" + cmd.module_name + "'\n\n" +
-               get_help(cmd.module_name);
-    }
-
-    if (!check_expected_types(cmd.module_name, cmd.command_name, cmd.args_count)) {
-        error_code = RESULT_ERROR;
-        return "Falha ao converter os tipos, a funcao espera => " +
-               get_expected_types(cmd.module_name, cmd.command_name) + "\n";
-    }
-
-    return "";
-}
-
-void** TinyShell::convert_args(const ParsedCommand& cmd, const char** types, string& error_msg) {
-    if (cmd.args_count == 0 || types == nullptr) return nullptr;
-
-    void** args = new void*[cmd.args_count]{};
-    size_t pos = 0;
-
-    // split the args_str by commas and convert each argument to the corresponding type
-    for (size_t i = 0; i < cmd.args_count; ++i) {
-        size_t next_pos = find_next_unescaped_comma(cmd.args_str, pos);
-        if (next_pos == string::npos) next_pos = cmd.args_str.length();
-
-        // get the argument substring
-        string arg = cmd.args_str.substr(pos, next_pos - pos);
-
-        // remove leading and trailing whitespace from the argument
-        const size_t first = arg.find_first_not_of(' ');
-        if (first == string::npos) {
-            arg.clear();
-        } else {
-            arg.erase(0, first);
-            arg.erase(arg.find_last_not_of(' ') + 1);
-        }
-
-        // decode escaped commas (\,) and escaped backslash (\\)
-        arg = unescape_commas(arg);
-
-        // convert the argument to the corresponding type
-        void* ptr = nullptr;
-        try {
-            ptr = convert_type_char(arg.c_str(), types[i]);
-            if (ptr == nullptr) {
-                error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "'";
-            }
-        } catch (const exception& e) {
-            error_msg = "Error converting argument '" + arg + "' to type '" + types[i] + "': " + string(e.what());
-        } catch (...) {
-            error_msg = "Unknown error converting argument '" + arg + "' to type '" + types[i] + "'";
-        }
-
-        if (!error_msg.empty()) {
-            for (size_t j = 0; j < i; ++j) {
-                destroy_type_char(args[j], types[j]);
-            }
-            delete[] args;
-            return nullptr;
-        }
-
-        args[i] = ptr;
-        pos = next_pos + 1;
-    }
-
-    return args;
-}
-
-string TinyShell::get_help(string module_name) {
-    if (module_name.empty()) return table_linker.get_all();
-    else return table_linker.get_all_module(module_name);
-}
-
-bool TinyShell::check_module_name(string module_name) {
-    return table_linker.check_module_name(module_name);
-}
-
-bool TinyShell::check_function_name(string module_name, string func_name) {
-    return table_linker.check_function_name(module_name, func_name);
-}
-
-string TinyShell::get_expected_types(string module_name, string func_name){
-    return table_linker.get_expected_types_str(module_name, func_name);
-}
-
-uint8_t TinyShell::create_module(string mod_name, string mod_description) {
-    return table_linker.create_module(mod_name, mod_description);
-}
-
-bool TinyShell::check_expected_types(string module_name, string command_name, size_t args_count) {
-    // Check if the module and command exist
-    return table_linker.check_expected_types(module_name, command_name, args_count);
-}
-
-uint8_t TinyShell::call(string module_name, string func_name, void** args) {
-    return table_linker.call(module_name, func_name, args);
 }

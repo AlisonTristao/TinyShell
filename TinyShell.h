@@ -3,192 +3,160 @@
 
 #include <TableLinker/TableLinker.h>
 #include <ShellStyle.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-using namespace std;
+// Longest command line run_command_line() accepts. The line is copied into a
+// stack buffer of this size (it is tokenized in place), so this is also the
+// per-call stack cost -- a command that runs another command nests one more.
+#ifndef TINYSHELL_MAX_LINE
+#define TINYSHELL_MAX_LINE 512
+#endif
+
+// Output is assembled in a stack buffer of this size and handed to the output
+// callback in chunks of whole lines: a normal response is one callback call,
+// a long help listing a few.
+#ifndef TINYSHELL_OUTPUT_CAPACITY
+#define TINYSHELL_OUTPUT_CAPACITY 256
+#endif
 
 // Output modes:
 // - Default: human-readable messages
-// - VERBOSE: returns only numeric status codes ("<code>\n")
-// - HARD_VERBOSE: returns no text (empty string)
+// - VERBOSE_OFF: returns only numeric status codes ("<code>\n")
+// - HARD_VERBOSE_OFF: returns no text at all
 
 // **********************************
 // *       Class of TinyShell       *
 // **********************************
-
-// The class receives a string type module -command args0, arg1, arg2, ... argsN
-// and run the command with the args
-
-// The command is a function pointer that is registered in the TableLinker
-// The args are converted to the correct type and passed to the function pointer
-// The args are passed as a void** pointer, so the function can receive any type of args
-// The function pointer is registered in the TableLinker with the name and description
-// The module is registered in the TableLinker with the name and description
-// The module can have multiple functions registered in it  
-// The module can be called with the call function
-// you can create custom argument converters in TableLinker/UserTypeConverters.h
-
-/**
- * @brief TinyShell class provides a shell-like interface for managing modules and commands.
- */
+//
+// Runs lines of the form `module -command arg0, arg1, ... argN`: finds the
+// command registered under that module, converts each comma-separated
+// argument to the matching parameter type (tinyshell::ArgType, see
+// TableLinker/TypeConversion.h -- `\,` is a literal comma) and calls it.
+//
+// Since 2.0.0 the shell allocates nothing to register or run a command:
+// fixed-capacity tables (TINYSHELL_MAX_* in TableLinker.h), names kept as
+// pointers to your string literals, the line parsed in place, arguments
+// converted straight into a stack tuple, no exceptions of its own. The only
+// allocations left are the ones you opt into: a std::string parameter longer
+// than its small-buffer size, an output callback that takes std::string
+// instead of std::string_view, TINYSHELL_COLOR's colouring pass, and
+// complete_line()'s result vector.
 class TinyShell {
-    public:   
-        /**
-         * @brief Default constructor for TinyShell.
-         */
-        TinyShell() {}
+public:
+    TinyShell() = default;
+    TinyShell(const TinyShell&) = delete;
+    TinyShell& operator=(const TinyShell&) = delete;
 
-        /** 
-         * @brief initialize the shell, put the helper command in the help module
-         */
-        
-        void begin() {
-            create_module("help", "Help module for listing available commands");
-            add(function<uint8_t()>([this]() { return this->wrapper_help(); }), "modules", "Description", "help");
-            add(function<uint8_t()>([this]() { return this->wrapper_help_types(); }), "types", "Description", "help");    
-        }
-    
-        template<typename F>
-        void set_output_callback(F&& callback) {
-            // convert the F to the internal OutCallback automatically
-            output_callback = function<void(const string&)>(forward<F>(callback));
-        }
+    /**
+     * @brief Registers the built-in "help" module (-modules, -types).
+     */
+    void begin();
 
-        /**
-         * @brief run a command line
-         * @param command: the command line to run
-         * @return return the result of the function
-         */
-        uint8_t run_command_line(string command);
+    /**
+     * @brief Where every response goes. Prefer a callback taking
+     * std::string_view -- it is handed the text straight out of the output
+     * buffer. One taking `const std::string&` (the 1.x shape) still works, at
+     * the cost of one std::string per call.
+     */
+    template <typename F>
+    void set_output_callback(F&& callback);
 
-        /**
-         * @brief Returns line-completion candidates for a partial shell input.
-         *
-         * Examples:
-         * - "do" -> ["dongle "]
-         * - "dongle -l" -> ["dongle -lcd ", "dongle -led ", ...]
-         *
-         * @param partial_command Partial command line being typed by the user.
-         * @param max_results Maximum number of candidates to return.
-         * @return List of full-line suggestions.
-         */
-        vector<string> complete_line(const string& partial_command, size_t max_results = 16);
+    /**
+     * @brief Run one command line.
+     * @return the command's own status, or RESULT_ERROR / FUNCTION_NOT_FOUND /
+     * MODULE_NOT_FOUND when it could not be run.
+     */
+    std::uint8_t run_command_line(std::string_view command);
 
-        /**
-         * @brief add a function to a module
-         * @param func: the function to add
-         * @param name: the name of the function
-         * @param description: the description of the function
-         * @param module_name: the name of the module
-         * @return return the result of the function
-         */
+    /**
+     * @brief Returns line-completion candidates for a partial shell input.
+     *
+     * Examples:
+     * - "do" -> ["dongle "]
+     * - "dongle -l" -> ["dongle -lcd ", "dongle -led ", ...]
+     */
+    std::vector<std::string> complete_line(std::string_view partial_command,
+                                           std::size_t max_results = 16);
 
-        template<typename F>
-        uint8_t add(F&& func, string name, string description, string module_name) {
-            return table_linker.add_func_to_module(module_name, function(forward<F>(func)), name, description);
-        }
+    /**
+     * @brief Add a command to a module. `func` is any callable returning
+     * uint8_t (0 = success) whose parameters have a tinyshell::ArgType.
+     * Keep `name`, `description` and `module_name` alive as long as the
+     * shell (string literals are); the std::string overload copies them into
+     * a fixed arena instead.
+     * @return RESULT_OK, MODULE_NOT_FOUND, TABLE_FULL, or RESULT_ERROR for a
+     * duplicate name.
+     */
+    template <typename F>
+    std::uint8_t add(F&& func, const char* name, const char* description, const char* module_name) {
+        return table_linker.add_func_to_module(module_name, std::forward<F>(func), name, description);
+    }
+    template <typename F>
+    std::uint8_t add(F&& func, const std::string& name, const std::string& description,
+                     const std::string& module_name) {
+        return table_linker.add_func_to_module(module_name, std::forward<F>(func), name, description);
+    }
 
-        uint8_t add(function<uint8_t()> func, string name, string description, string module_name) {
-            return table_linker.add_func_to_module(module_name, func, name, description);
-        }
+    /**
+     * @brief Create a module (same lifetime rule for the strings as add()).
+     * @return RESULT_OK, TABLE_FULL, or MODULE_NOT_FOUND if it already exists.
+     */
+    std::uint8_t create_module(const char* mod_name, const char* mod_description) {
+        return table_linker.create_module(mod_name, mod_description);
+    }
+    std::uint8_t create_module(const std::string& mod_name, const std::string& mod_description) {
+        return table_linker.create_module(mod_name, mod_description);
+    }
 
-        /**
-         * @brief create a module
-         * @param mod_name: the name of the module
-         * @param mod_description: the description of the module
-         * @return return the result of the function
-         */
-        uint8_t create_module(string mod_name, string mod_description);
-    private:
-        TableLinker table_linker;
-        function<void(const string&)> output_callback = [](const string& output) { (void) output; };
-        struct ParsedCommand {
-            string module_name;
-            string command_name;
-            string args_str;
-            size_t args_count;
+    /**
+     * @brief Registrations refused because a table was full. Non-zero means a
+     * TINYSHELL_MAX_* capacity is too small for this firmware.
+     */
+    std::size_t dropped_registrations() const noexcept {
+        return table_linker.dropped_registrations();
+    }
+
+private:
+    class Writer;
+
+    void emit(std::string_view chunk, ShellMsgClass msg_class);
+    void write_module_list(Writer& out);
+    void write_module_help(Writer& out, std::size_t module);
+    void write_types(Writer& out, const tinyshell::Command& command);
+    std::uint8_t wrapper_help();
+    std::uint8_t wrapper_help_types();
+
+    TableLinker table_linker;
+    std::function<void(std::string_view)> output_callback;
+};
+
+template <typename F>
+void TinyShell::set_output_callback(F&& callback) {
+    using Fn = std::decay_t<F>;
+    if constexpr (std::is_invocable<Fn&, std::string_view>::value) {
+        output_callback = std::function<void(std::string_view)>(std::forward<F>(callback));
+    } else {
+        static_assert(std::is_invocable<Fn&, const std::string&>::value,
+                      "TinyShell: the output callback must take std::string_view or const std::string&");
+        output_callback = [fn = Fn(std::forward<F>(callback))](std::string_view text) mutable {
+            fn(std::string(text));
         };
+    }
+}
 
-        /**
-         * @brief Retrieve module information.
-         * @param module_name: name of the module to get help, if empty return all modules
-         * @return return all items inside the module
-         */
-        string get_help(string module_name = "");
-        uint8_t wrapper_help() {
-            output_callback(shell_colorize_block(get_help(), ShellMsgClass::Help));
-            return RESULT_OK;
-        };
-        uint8_t wrapper_help_types() {
-            output_callback(shell_colorize_block(get_types(), ShellMsgClass::Help));
-            return RESULT_OK;
-        };
-
-        /**
-         * @brief Parses a command string into its components.
-         * @param command The command string to parse.
-         * @return ParsedCommand structure containing parsed data.
-         */
-        ParsedCommand parse_command(const string& command);
-
-        /**
-         * @brief Validates a parsed command.
-         * @param cmd The parsed command to validate.
-         * @param error_code Numeric error code generated during validation.
-         * @return Error message if invalid, empty string if valid.
-         */
-        string validate_command(const ParsedCommand& cmd, uint8_t& error_code);
-
-        /**
-         * @brief Converts command arguments to appropriate types.
-         * @param cmd The parsed command containing arguments.
-         * @param types Array of expected argument types.
-         * @param error_msg Reference to error message string.
-         * @return Array of converted arguments as void pointers.
-         */
-        void** convert_args(const ParsedCommand& cmd, const char** types, string& error_msg);
-
-        /**
-         * @brief Checks if the received argument types match the expected types for a function.
-         * @param module_name Name of the module.
-         * @param func_name Name of the function.
-         * @param receive Number of received arguments.
-         * @return True if types match, false otherwise.
-         */
-        bool check_expected_types(string module_name, string func_name, size_t receive);
-
-        /**
-         * @brief Checks if a module name exists.
-         * @param module_name Name of the module to check.
-         * @return True if module exists, false otherwise.
-         */
-        bool check_module_name(string module_name);
-
-        /**
-         * @brief Checks if a function name exists within a module.
-         * @param module_name Name of the module.
-         * @param func_name Name of the function to check.
-         * @return True if function exists, false otherwise.
-         */
-        bool check_function_name(string module_name, string func_name);
-
-        /**
-         * @brief Gets the expected argument types for a function in a module.
-         * @param module_name Name of the module.
-         * @param func_name Name of the function.
-         * @return String describing expected types.
-         */
-        string get_expected_types(string module_name, string func_name);
-
-        /**
-         * @brief Calls a function within a module with given arguments.
-         * @param module_name Name of the module.
-         * @param func_name Name of the function.
-         * @param args Arguments to pass to the function.
-         * @return Result of the function call.
-         */
-        uint8_t call(string module_name, string func_name, void** args = nullptr);
-    };
-
+// 1.x put `using namespace std;` in this header and code that includes it
+// relies on that. Kept for compatibility, deprecated: define
+// TINYSHELL_NO_USING_NAMESPACE_STD to keep std out of the global namespace.
+#ifndef TINYSHELL_NO_USING_NAMESPACE_STD
+using namespace std;
 #endif
+
+#endif  // TINY_SHELL_H

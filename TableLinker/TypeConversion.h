@@ -1,183 +1,155 @@
 #ifndef TYPE_CONVERSION_H
 #define TYPE_CONVERSION_H
 
-#include <cctype>
+// Argument parsing for TinyShell commands: one tinyshell::ArgType<T> per
+// parameter type a command may take.
+//
+// Allocation-free and exception-free: a parser reads one argument token and
+// writes the value straight into the command's own (stack) argument tuple.
+// The token it gets is already trimmed, unescaped and NUL-terminated, lives in
+// a writable buffer owned by run_command_line(), and is valid only for the
+// duration of that one command -- so std::string_view / const char* parameters
+// can point straight at it with no copy. std::string parameters still work;
+// they allocate only when the text outgrows the string's small-buffer storage.
+//
+// Integer types are matched by size and signedness, not by exact type, so
+// `int`, `long`, `int32_t` (which is `long` on ESP-IDF 5) all parse the same
+// way. The help listing names each parameter with a short type code:
+//   i1 i2 i4 i8   signed integers (1/2/4/8 bytes)
+//   u1 u2 u4 u8   unsigned integers
+//   f4 f8         float / double
+//   b1            bool   (1/0, true/false, on/off, yes/no -- any case)
+//   c1            char   (x, 'x' or an escape such as \n)
+//   s0            text   (std::string, std::string_view, const char*)
+//
+// Add your own parameter types by specializing tinyshell::ArgType<T> -- see
+// UserTypeConverters.h.
+
 #include <cerrno>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
-#include "UserTypeConverters.h"
+namespace tinyshell {
 
-// ****************************************
-// * Templates to convert typeid to codes *
-// ****************************************
-template<typename T>
-constexpr const char* type_code() {
-    using Type = typename std::decay<T>::type;
+// The contract every specialization follows:
+//
+//   static constexpr const char* code;   // short name shown by help
+//   static bool parse(const char* token, T& out, const char*& error);
+//
+// parse() returns false on bad input and may set `error` to a static,
+// human-readable reason ("integer out of range"); it must not allocate unless
+// T itself does, and must not throw.
+template <typename T, typename Enable = void>
+struct ArgType {
+    static_assert(sizeof(T) == 0,
+                  "TinyShell: no parser for this command parameter type. Use an integer, "
+                  "float/double, bool, char, std::string, std::string_view or const char*, "
+                  "or specialize tinyshell::ArgType<T> (see UserTypeConverters.h).");
+};
 
-    if constexpr (std::is_same<Type, int8_t>::value) return "i1";
-    if constexpr (std::is_same<Type, uint8_t>::value) return "u1";
-    if constexpr (std::is_same<Type, int16_t>::value) return "i2";
-    if constexpr (std::is_same<Type, uint16_t>::value) return "u2";
-    if constexpr (std::is_same<Type, int32_t>::value) return "i4";
-    if constexpr (std::is_same<Type, uint32_t>::value) return "u4";
-    if constexpr (std::is_same<Type, int64_t>::value) return "i8";
-    if constexpr (std::is_same<Type, uint64_t>::value) return "u8";
-    if constexpr (std::is_same<Type, bool>::value) return "b1";
-    if constexpr (std::is_same<Type, float>::value) return "f4";
-    if constexpr (std::is_same<Type, double>::value) return "f8";
-    if constexpr (std::is_same<Type, char>::value) return "c1";
-    if constexpr (std::is_same<Type, std::string>::value) return "s0";
-    return "??";
-}
+namespace detail {
 
-namespace tinyshell_detail {
+template <typename T>
+constexpr bool is_plain_integer_v = std::is_integral<T>::value && !std::is_same<T, bool>::value &&
+                                    !std::is_same<T, char>::value;
 
-inline std::invalid_argument make_conversion_error(const char* type_code, const std::string& detail) {
-    return std::invalid_argument(
-        "Conversion failed for type '" + std::string(type_code ? type_code : "<null>") + "': " + detail
-    );
-}
-
-inline std::string trim_copy(const char* data) {
-    if (data == nullptr) return "";
-
-    std::string value(data);
-    size_t start = 0;
-    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
-        ++start;
+template <typename T>
+constexpr const char* integer_code() {
+    if (std::is_signed<T>::value) {
+        return sizeof(T) == 1 ? "i1" : sizeof(T) == 2 ? "i2" : sizeof(T) == 4 ? "i4" : "i8";
     }
-
-    size_t end = value.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-        --end;
-    }
-
-    return value.substr(start, end - start);
+    return sizeof(T) == 1 ? "u1" : sizeof(T) == 2 ? "u2" : sizeof(T) == 4 ? "u4" : "u8";
 }
 
-template<typename T>
-bool parse_signed_integer(const char* data, T& out, std::string& error_msg) {
-    const std::string value = trim_copy(data);
-    if (value.empty()) {
-        error_msg = "empty integer value";
+inline char lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+inline bool equals_ignore_case(const char* a, const char* b) {
+    for (; *a != '\0' && *b != '\0'; ++a, ++b) {
+        if (lower(*a) != lower(*b)) return false;
+    }
+    return *a == *b;
+}
+
+// Base 0, like strtol: 0x.. hex, a leading 0 octal, decimal otherwise.
+template <typename T>
+bool parse_signed(const char* token, T& out, const char*& error) {
+    if (*token == '\0') {
+        error = "empty integer value";
         return false;
     }
-
     errno = 0;
-    char* end_ptr = nullptr;
-    const long long parsed = std::strtoll(value.c_str(), &end_ptr, 0);
-
-    if (end_ptr == value.c_str() || *end_ptr != '\0') {
-        error_msg = "invalid integer format";
+    char* end = nullptr;
+    const long long value = std::strtoll(token, &end, 0);
+    if (end == token || *end != '\0') {
+        error = "invalid integer format";
         return false;
     }
-
-    if (errno == ERANGE ||
-        parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
-        parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
-        error_msg = "integer out of range";
+    if (errno == ERANGE || value < static_cast<long long>(std::numeric_limits<T>::min()) ||
+        value > static_cast<long long>(std::numeric_limits<T>::max())) {
+        error = "integer out of range";
         return false;
     }
-
-    out = static_cast<T>(parsed);
+    out = static_cast<T>(value);
     return true;
 }
 
-template<typename T>
-bool parse_unsigned_integer(const char* data, T& out, std::string& error_msg) {
-    const std::string value = trim_copy(data);
-    if (value.empty()) {
-        error_msg = "empty unsigned integer value";
+template <typename T>
+bool parse_unsigned(const char* token, T& out, const char*& error) {
+    if (*token == '\0') {
+        error = "empty unsigned integer value";
         return false;
     }
-
-    if (value[0] == '-') {
-        error_msg = "negative value for unsigned type";
+    if (*token == '-') {
+        error = "negative value for unsigned type";
         return false;
     }
-
     errno = 0;
-    char* end_ptr = nullptr;
-    const unsigned long long parsed = std::strtoull(value.c_str(), &end_ptr, 0);
-
-    if (end_ptr == value.c_str() || *end_ptr != '\0') {
-        error_msg = "invalid unsigned integer format";
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(token, &end, 0);
+    if (end == token || *end != '\0') {
+        error = "invalid unsigned integer format";
         return false;
     }
-
-    if (errno == ERANGE || parsed > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
-        error_msg = "unsigned integer out of range";
+    if (errno == ERANGE || value > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
+        error = "unsigned integer out of range";
         return false;
     }
-
-    out = static_cast<T>(parsed);
+    out = static_cast<T>(value);
     return true;
 }
 
-template<typename T>
-bool parse_floating_point(const char* data, T& out, std::string& error_msg) {
-    const std::string value = trim_copy(data);
-    if (value.empty()) {
-        error_msg = "empty floating-point value";
+template <typename T>
+bool parse_floating(const char* token, T& out, const char*& error) {
+    if (*token == '\0') {
+        error = "empty floating-point value";
         return false;
     }
-
     errno = 0;
-    char* end_ptr = nullptr;
-    const long double parsed = std::strtold(value.c_str(), &end_ptr);
-
-    if (end_ptr == value.c_str() || *end_ptr != '\0') {
-        error_msg = "invalid floating-point format";
+    char* end = nullptr;
+    const double value = std::strtod(token, &end);
+    if (end == token || *end != '\0') {
+        error = "invalid floating-point format";
         return false;
     }
-
-    if (errno == ERANGE || !std::isfinite(parsed)) {
-        error_msg = "floating-point value out of range";
+    if (errno == ERANGE || !std::isfinite(value)) {
+        error = "floating-point value out of range";
         return false;
     }
-
-    if (parsed < -static_cast<long double>(std::numeric_limits<T>::max()) ||
-        parsed > static_cast<long double>(std::numeric_limits<T>::max())) {
-        error_msg = "floating-point value out of target type range";
+    if (value < -static_cast<double>(std::numeric_limits<T>::max()) ||
+        value > static_cast<double>(std::numeric_limits<T>::max())) {
+        error = "floating-point value out of target type range";
         return false;
     }
-
-    out = static_cast<T>(parsed);
+    out = static_cast<T>(value);
     return true;
-}
-
-inline bool parse_bool(const char* data, bool& out, std::string& error_msg) {
-    const std::string value = trim_copy(data);
-    if (value.empty()) {
-        error_msg = "empty boolean value";
-        return false;
-    }
-
-    std::string lowered;
-    lowered.reserve(value.size());
-    for (char c : value) {
-        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-
-    if (lowered == "1" || lowered == "true" || lowered == "on" || lowered == "yes") {
-        out = true;
-        return true;
-    }
-
-    if (lowered == "0" || lowered == "false" || lowered == "off" || lowered == "no") {
-        out = false;
-        return true;
-    }
-
-    error_msg = "invalid boolean value";
-    return false;
 }
 
 inline bool parse_escaped_char(char escaped, char& out) {
@@ -193,157 +165,137 @@ inline bool parse_escaped_char(char escaped, char& out) {
     }
 }
 
-inline bool parse_char(const char* data, char& out, std::string& error_msg) {
-    std::string value = trim_copy(data);
-    if (value.empty()) {
-        error_msg = "empty char value";
+}  // namespace detail
+
+template <typename T>
+struct ArgType<T, std::enable_if_t<detail::is_plain_integer_v<T> && std::is_signed<T>::value>> {
+    static constexpr const char* code = detail::integer_code<T>();
+    static bool parse(const char* token, T& out, const char*& error) {
+        return detail::parse_signed(token, out, error);
+    }
+};
+
+template <typename T>
+struct ArgType<T, std::enable_if_t<detail::is_plain_integer_v<T> && std::is_unsigned<T>::value>> {
+    static constexpr const char* code = detail::integer_code<T>();
+    static bool parse(const char* token, T& out, const char*& error) {
+        return detail::parse_unsigned(token, out, error);
+    }
+};
+
+template <>
+struct ArgType<float> {
+    static constexpr const char* code = "f4";
+    static bool parse(const char* token, float& out, const char*& error) {
+        return detail::parse_floating(token, out, error);
+    }
+};
+
+template <>
+struct ArgType<double> {
+    static constexpr const char* code = "f8";
+    static bool parse(const char* token, double& out, const char*& error) {
+        return detail::parse_floating(token, out, error);
+    }
+};
+
+template <>
+struct ArgType<bool> {
+    static constexpr const char* code = "b1";
+    static bool parse(const char* token, bool& out, const char*& error) {
+        if (*token == '\0') {
+            error = "empty boolean value";
+            return false;
+        }
+        for (const char* yes : {"1", "true", "on", "yes"}) {
+            if (detail::equals_ignore_case(token, yes)) {
+                out = true;
+                return true;
+            }
+        }
+        for (const char* no : {"0", "false", "off", "no"}) {
+            if (detail::equals_ignore_case(token, no)) {
+                out = false;
+                return true;
+            }
+        }
+        error = "invalid boolean value";
         return false;
     }
+};
 
-    if (value.size() >= 3 && value.front() == '\'' && value.back() == '\'') {
-        value = value.substr(1, value.size() - 2);
+template <>
+struct ArgType<char> {
+    static constexpr const char* code = "c1";
+    static bool parse(const char* token, char& out, const char*& error) {
+        std::string_view value(token);
+        if (value.empty()) {
+            error = "empty char value";
+            return false;
+        }
+        if (value.size() >= 3 && value.front() == '\'' && value.back() == '\'') {
+            value = value.substr(1, value.size() - 2);
+        }
+        if (value.size() == 1) {
+            out = value[0];
+            return true;
+        }
+        if (value.size() == 2 && value[0] == '\\' && detail::parse_escaped_char(value[1], out)) {
+            return true;
+        }
+        error = "invalid char value";
+        return false;
     }
+};
 
-    if (value.size() == 1) {
-        out = value[0];
+// Copies the text -- allocates only past the string's small-buffer size.
+template <>
+struct ArgType<std::string> {
+    static constexpr const char* code = "s0";
+    static bool parse(const char* token, std::string& out, const char*& error) {
+        (void)error;
+        out.assign(token);
         return true;
     }
+};
 
-    if (value.size() == 2 && value[0] == '\\' && parse_escaped_char(value[1], out)) {
+// Zero-copy: views the token, valid only while the command runs.
+template <>
+struct ArgType<std::string_view> {
+    static constexpr const char* code = "s0";
+    static bool parse(const char* token, std::string_view& out, const char*& error) {
+        (void)error;
+        out = token;
         return true;
     }
+};
 
-    error_msg = "invalid char value";
-    return false;
-}
-
-template<typename T>
-void* parse_and_allocate_signed(const char* data, const char* type_code) {
-    T value{};
-    std::string error_msg;
-    if (!parse_signed_integer<T>(data, value, error_msg)) {
-        throw make_conversion_error(type_code, error_msg);
+// Zero-copy, NUL-terminated: valid only while the command runs.
+template <>
+struct ArgType<const char*> {
+    static constexpr const char* code = "s0";
+    static bool parse(const char* token, const char*& out, const char*& error) {
+        (void)error;
+        out = token;
+        return true;
     }
-    return new T(value);
-}
+};
 
-template<typename T>
-void* parse_and_allocate_unsigned(const char* data, const char* type_code) {
-    T value{};
-    std::string error_msg;
-    if (!parse_unsigned_integer<T>(data, value, error_msg)) {
-        throw make_conversion_error(type_code, error_msg);
-    }
-    return new T(value);
-}
+}  // namespace tinyshell
 
-template<typename T>
-void* parse_and_allocate_float(const char* data, const char* type_code) {
-    T value{};
-    std::string error_msg;
-    if (!parse_floating_point<T>(data, value, error_msg)) {
-        throw make_conversion_error(type_code, error_msg);
-    }
-    return new T(value);
-}
-
-template<typename T>
-void destroy_as(void* ptr) {
-    delete static_cast<T*>(ptr);
-}
-
-} // namespace tinyshell_detail
-
-inline void* convert_type_char(const char* data, const char* type_code) {
-    if (type_code == nullptr) {
-        throw std::invalid_argument("Type code is null");
-    }
-
-    if (std::strcmp(type_code, "i1") == 0) return tinyshell_detail::parse_and_allocate_signed<int8_t>(data, type_code);
-    if (std::strcmp(type_code, "u1") == 0) return tinyshell_detail::parse_and_allocate_unsigned<uint8_t>(data, type_code);
-    if (std::strcmp(type_code, "i2") == 0) return tinyshell_detail::parse_and_allocate_signed<int16_t>(data, type_code);
-    if (std::strcmp(type_code, "u2") == 0) return tinyshell_detail::parse_and_allocate_unsigned<uint16_t>(data, type_code);
-    if (std::strcmp(type_code, "i4") == 0) return tinyshell_detail::parse_and_allocate_signed<int32_t>(data, type_code);
-    if (std::strcmp(type_code, "u4") == 0) return tinyshell_detail::parse_and_allocate_unsigned<uint32_t>(data, type_code);
-    if (std::strcmp(type_code, "i8") == 0) return tinyshell_detail::parse_and_allocate_signed<int64_t>(data, type_code);
-    if (std::strcmp(type_code, "u8") == 0) return tinyshell_detail::parse_and_allocate_unsigned<uint64_t>(data, type_code);
-
-    if (std::strcmp(type_code, "f4") == 0) return tinyshell_detail::parse_and_allocate_float<float>(data, type_code);
-    if (std::strcmp(type_code, "f8") == 0) return tinyshell_detail::parse_and_allocate_float<double>(data, type_code);
-
-    if (std::strcmp(type_code, "b1") == 0) {
-        bool value = false;
-        std::string error_msg;
-        if (!tinyshell_detail::parse_bool(data, value, error_msg)) {
-            throw tinyshell_detail::make_conversion_error(type_code, error_msg);
-        }
-        return new bool(value);
-    }
-
-    if (std::strcmp(type_code, "c1") == 0) {
-        char value = '\0';
-        std::string error_msg;
-        if (!tinyshell_detail::parse_char(data, value, error_msg)) {
-            throw tinyshell_detail::make_conversion_error(type_code, error_msg);
-        }
-        return new char(value);
-    }
-
-    if (std::strcmp(type_code, "s0") == 0) return new std::string(data ? data : "");
-
-    void* custom_ptr = nullptr;
-    std::string custom_error;
-    if (TinyShellUserConverters::convert_type_custom(data, type_code, custom_ptr, custom_error)) {
-        if (custom_ptr == nullptr) {
-            throw tinyshell_detail::make_conversion_error(
-                type_code,
-                custom_error.empty() ? "custom converter returned null pointer" : custom_error
-            );
-        }
-        return custom_ptr;
-    }
-
-    if (!custom_error.empty()) {
-        throw tinyshell_detail::make_conversion_error(type_code, custom_error);
-    }
-
-    throw std::invalid_argument("Unknown type code: " + std::string(type_code));
-}
-
-inline void destroy_type_char(void* ptr, const char* type_code) {
-    if (ptr == nullptr || type_code == nullptr) return;
-
-    if (std::strcmp(type_code, "i1") == 0) { tinyshell_detail::destroy_as<int8_t>(ptr); return; }
-    if (std::strcmp(type_code, "u1") == 0) { tinyshell_detail::destroy_as<uint8_t>(ptr); return; }
-    if (std::strcmp(type_code, "i2") == 0) { tinyshell_detail::destroy_as<int16_t>(ptr); return; }
-    if (std::strcmp(type_code, "u2") == 0) { tinyshell_detail::destroy_as<uint16_t>(ptr); return; }
-    if (std::strcmp(type_code, "i4") == 0) { tinyshell_detail::destroy_as<int32_t>(ptr); return; }
-    if (std::strcmp(type_code, "u4") == 0) { tinyshell_detail::destroy_as<uint32_t>(ptr); return; }
-    if (std::strcmp(type_code, "i8") == 0) { tinyshell_detail::destroy_as<int64_t>(ptr); return; }
-    if (std::strcmp(type_code, "u8") == 0) { tinyshell_detail::destroy_as<uint64_t>(ptr); return; }
-    if (std::strcmp(type_code, "f4") == 0) { tinyshell_detail::destroy_as<float>(ptr); return; }
-    if (std::strcmp(type_code, "f8") == 0) { tinyshell_detail::destroy_as<double>(ptr); return; }
-    if (std::strcmp(type_code, "b1") == 0) { tinyshell_detail::destroy_as<bool>(ptr); return; }
-    if (std::strcmp(type_code, "c1") == 0) { tinyshell_detail::destroy_as<char>(ptr); return; }
-    if (std::strcmp(type_code, "s0") == 0) { tinyshell_detail::destroy_as<std::string>(ptr); return; }
-
-    (void)TinyShellUserConverters::destroy_type_custom(ptr, type_code);
-}
-
-inline string get_types() {
+// The reference text "help -types" prints -- keep it in step with the codes
+// above.
+inline const char* get_types() {
     return "\n"
-           "Type aliases used by shell:    \n"
-           "u8  => uint8_t                 \n"
-           "u16 => uint16_t                \n"
-           "u32 => uint32_t                \n"
-           "u64 => uint64_t                \n"
-           "i8  => int8_t                  \n"
-           "i16 => int16_t                 \n"
-           "i32 => int32_t                 \n"
-           "i64 => int64_t                 \n"
-           "f32 => float                   \n"
-           "f64 => double                  \n"
-           "b   => bool                    \n"
-           "str => string                  \n";
+           "Parameter types shown by help:\n"
+           "i1 i2 i4 i8 => signed integer, 1/2/4/8 bytes\n"
+           "u1 u2 u4 u8 => unsigned integer, 1/2/4/8 bytes (0x.. hex accepted)\n"
+           "f4 f8       => float / double\n"
+           "b1          => bool (1/0, true/false, on/off, yes/no)\n"
+           "c1          => char (x, 'x' or an escape such as \\n)\n"
+           "s0          => text (use \\, for a literal comma)\n";
 }
-#endif // TYPE_CONVERSION_H
+
+#include "UserTypeConverters.h"
+
+#endif  // TYPE_CONVERSION_H
