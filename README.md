@@ -2,7 +2,18 @@
 
 ## Version
 
-Current version: **2.0.0**
+Current version: **2.1.0**
+
+### What's New in 2.1.0
+
+TinyShell is now also an ESP-IDF component and a plain CMake library. No code
+changed.
+
+- **ESP-IDF:** list the checkout in `EXTRA_COMPONENT_DIRS` (or pull it with the
+  component manager) and `REQUIRES TinyShell`. The capacities below and
+  `TINYSHELL_COLOR` are set in `menuconfig` → *TinyShell* instead of `-D` flags.
+- **CMake:** `add_subdirectory(TinyShell)` gives the `tinyshell` target.
+- PlatformIO keeps using `library.json`, unchanged.
 
 ### What's New in 2.0.0
 

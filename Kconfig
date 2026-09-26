@@ -1,0 +1,36 @@
+menu "TinyShell"
+
+    config TINYSHELL_COLOR
+        bool "Semantic ANSI colours in shell output"
+        default y
+        help
+            Colours module names, function names and arguments in live input
+            and help output (ShellStyle.h). TraceView maps these pens to its
+            theme. Turn off for a plain serial monitor.
+
+    config TINYSHELL_MAX_MODULES
+        int "Maximum number of modules"
+        default 32
+        range 1 255
+
+    config TINYSHELL_MAX_COMMANDS
+        int "Maximum number of commands (total, across every module)"
+        default 160
+        range 1 1024
+
+    config TINYSHELL_MAX_ARGS
+        int "Maximum number of arguments per command"
+        default 8
+        range 1 16
+
+    config TINYSHELL_MAX_LINE
+        int "Maximum command line length (bytes, also the per-call stack cost)"
+        default 512
+        range 64 4096
+
+    config TINYSHELL_OUTPUT_CAPACITY
+        int "Output buffer size (bytes, flushed to the callback per line)"
+        default 256
+        range 64 4096
+
+endmenu
