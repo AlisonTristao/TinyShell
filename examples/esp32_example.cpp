@@ -62,6 +62,30 @@ uint8_t teste_2(int a, int b, uint8_t c) {
     return RESULT_ERROR;  // return 255 to indicate an error
 }
 
+// ---------------------------------------------------------------------------
+// Progress bar. `slow_job` is the kind of function that lives in another
+// library: it knows nothing about the shell, it just reports its progress to
+// an optional plain C callback.
+using ProgressFn = void (*)(void* ctx, uint8_t percent);
+
+uint8_t slow_job(int steps, ProgressFn on_progress, void* ctx) {
+    for (int i = 1; i <= steps; ++i) {
+        delay(50);  // the real work
+        if (on_progress) on_progress(ctx, static_cast<uint8_t>(i * 100 / steps));
+    }
+    return RESULT_OK;
+}
+
+// The sink: redraws one line with '\r' (needs a terminal that honours it --
+// PuTTY, picocom, idf.py monitor; not the Arduino IDE Serial Monitor).
+void serial_progress(void* label, uint8_t percent) {
+    char line[80];
+    shell_format_progress(line, sizeof(line), percent, static_cast<const char*>(label));
+    Serial.print('\r');
+    Serial.print(line);
+    if (percent >= 100) Serial.println();
+}
+
 void setup() {
     Serial.begin(921600);
     delay(1000);
@@ -84,6 +108,12 @@ void setup() {
 
     // add the wrapper function to the (built-in) help module
     ts.add(wrapper_e, "e", "Explica o uso do comando", "help");
+
+    // progress bar: the lambda is the only place that knows both the job and
+    // the terminal -- the shell sees `demo -progress (i4)`
+    ts.create_module("demo", "Terminal demos");
+    ts.add([](int steps) { return slow_job(steps, serial_progress, (void*)"job"); },
+           "progress", "Run a job with a progress bar: demo -progress 40", "demo");
 }
 
 String commandBuffer = "";

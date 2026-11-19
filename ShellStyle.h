@@ -36,7 +36,7 @@ enum class ShellMsgClass : std::uint8_t {
     Muted,       ///< low-priority: ESP-NOW [info]/[debug]/[telemetry] log lines
     InputModule,   ///< first command token (dark yellow)
     InputFunction, ///< second command token (dark blue)
-    InputArgument, ///< remaining command tokens (black)
+    InputArgument, ///< remaining command tokens (default foreground)
 };
 
 /// A line -> its semantic class. Same shape as `shell_classify_line`, so that
@@ -67,7 +67,8 @@ constexpr const char* shell_sgr(ShellMsgClass cls) noexcept {
         case ShellMsgClass::Muted:   return "\x1b[90m";  // bright black / grey
         case ShellMsgClass::InputModule:   return "\x1b[33m";  // dark yellow
         case ShellMsgClass::InputFunction: return "\x1b[34m";  // dark blue
-        case ShellMsgClass::InputArgument: return "\x1b[30m";  // black
+        // Default foreground, not black: ANSI 30 vanishes on a dark background.
+        case ShellMsgClass::InputArgument: return "\x1b[39m";  // default foreground
         case ShellMsgClass::Output:
         default:                     return "";
     }
@@ -121,5 +122,31 @@ std::string shell_strip_sgr(std::string_view text);
 std::string shell_colorize_block(std::string_view text,
                                  ShellMsgClass fallback = ShellMsgClass::Output,
                                  ShellLineClassifier classifier = &shell_classify_line);
+
+/// Default bar width (columns between the brackets) of shell_format_progress().
+inline constexpr std::size_t SHELL_PROGRESS_WIDTH = 30;
+
+/**
+ * @brief Format one progress-bar line into a caller-owned buffer:
+ *
+ *     "flash  42% [===========>                  ]"
+ *
+ * Only formats -- no leading '\r', no newline, no I/O, no allocation. How it
+ * reaches the screen is the caller's choice: ShellLineEditor::writeProgress()
+ * redraws it in place on an interactive terminal; a plain Serial sketch can
+ * print "\r" + this line.
+ *
+ * The filled part is green when built with TINYSHELL_COLOR.
+ *
+ * @param out Destination, always NUL-terminated when @p capacity > 0; a line
+ *   that does not fit is truncated.
+ * @param percent 0..100; larger values are clamped to 100.
+ * @param label Optional text before the percentage (empty: none).
+ * @param width Columns between the brackets, clamped to [1, 100].
+ * @return Bytes written, excluding the NUL.
+ */
+std::size_t shell_format_progress(char* out, std::size_t capacity, unsigned percent,
+                                  std::string_view label = {},
+                                  std::size_t width = SHELL_PROGRESS_WIDTH) noexcept;
 
 #endif  // SHELL_STYLE_H

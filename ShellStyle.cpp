@@ -268,3 +268,66 @@ std::string shell_colorize_block(std::string_view text, ShellMsgClass fallback,
 
     return out;
 }
+
+namespace {
+
+// Bounded append into a caller buffer: keeps room for the NUL, drops the rest.
+struct BoundedText {
+    char* out;
+    std::size_t capacity;
+    std::size_t length = 0;
+
+    void put(char c) noexcept {
+        if (capacity != 0 && length + 1 < capacity) out[length++] = c;
+    }
+    void put(std::string_view text) noexcept {
+        for (const char c : text) put(c);
+    }
+    void repeat(char c, std::size_t count) noexcept {
+        for (std::size_t i = 0; i < count; ++i) put(c);
+    }
+    std::size_t finish() noexcept {
+        if (capacity != 0) out[length] = '\0';
+        return length;
+    }
+};
+
+}  // namespace
+
+std::size_t shell_format_progress(char* out, std::size_t capacity, unsigned percent,
+                                  std::string_view label, std::size_t width) noexcept {
+    BoundedText text{out, out != nullptr ? capacity : 0};
+    if (percent > 100) percent = 100;
+    if (width < 1) width = 1;
+    if (width > 100) width = 100;
+
+    if (!label.empty()) {
+        text.put(label);
+        text.put(' ');
+    }
+
+    // "%3u%%" without snprintf: right-aligned in three columns.
+    const char digits[3] = {static_cast<char>('0' + percent / 100),
+                            static_cast<char>('0' + (percent / 10) % 10),
+                            static_cast<char>('0' + percent % 10)};
+    text.put(percent >= 100 ? digits[0] : ' ');
+    text.put(percent >= 10 ? digits[1] : ' ');
+    text.put(digits[2]);
+    text.put("% [");
+
+    // wget-style: "=====>    " while running, all '=' once complete.
+    const std::size_t filled = static_cast<std::size_t>(percent) * width / 100;
+    if (filled != 0) {
+        text.put(shell_sgr(ShellMsgClass::Success));
+        if (percent < 100) {
+            text.repeat('=', filled - 1);
+            text.put('>');
+        } else {
+            text.repeat('=', filled);
+        }
+        text.put(shell_sgr_reset());
+    }
+    text.repeat(' ', width - filled);
+    text.put(']');
+    return text.finish();
+}

@@ -70,7 +70,7 @@ void test_command_tokens_use_semantic_echo_colours() {
     std::string line;
     assert(!ed.poll(out, &line));
 #ifdef TINYSHELL_COLOR
-    assert(out == "\x1b[33mdongle\x1b[30m \x1b[34m-ping\x1b[30m 7\x1b[0m");
+    assert(out == "\x1b[33mdongle\x1b[39m \x1b[34m-ping\x1b[39m 7\x1b[0m");
 #else
     assert(out == "dongle -ping 7");
 #endif
@@ -113,7 +113,7 @@ void test_history_redraw_preserves_command_token_colours() {
 #ifdef TINYSHELL_COLOR
     assert(out.find("\x1b[33mdongle") != std::string::npos);
     assert(out.find("\x1b[34m-ping") != std::string::npos);
-    assert(out.find("\x1b[30m 7") != std::string::npos);
+    assert(out.find("\x1b[39m 7") != std::string::npos);
 #else
     assert(out.find('\x1b') == std::string::npos);
 #endif
@@ -233,6 +233,62 @@ void test_write_async_output_breaks_off_prompt_then_stacks() {
     assert(l == "ab");
 }
 
+// A command is running (Enter already moved to a fresh line, no prompt): the
+// bar redraws in place and the response starts below it.
+void test_write_progress_redraws_in_place_during_a_command() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+    ed.feed(std::string("x\r"));
+    std::string l;
+    assert(ed.poll(out, &l) && l == "x");
+
+    out.clear();
+    ed.writeProgress(" 10% [=>  ]", out);
+    assert(out == "\r 10% [=>  ]");  // no newline, no prompt break
+
+    out.clear();
+    ed.writeProgress("done", out);   // shorter: the old tail is blanked
+    assert(out == "\rdone       ");
+
+    out.clear();
+    ed.writeResponse("ok", out);     // the bar stays; the response goes below
+    assert(stripSgr(out) == "\r\nok\r\n\r$ \r$ ");
+}
+
+// Async progress while the user sits at the prompt: the first update breaks
+// off the prompt line, typing brings it back below the bar.
+void test_write_progress_from_the_prompt_and_typing_restores_it() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.setPrompt("$ ", out);
+    ed.feed(std::string("ab"));
+    ed.poll(out, nullptr);
+
+    out.clear();
+    ed.writeProgress("50%", out);
+    assert(out == "\r\n\r50%");
+
+    out.clear();
+    ed.feed(std::string("c"));
+    ed.poll(out, nullptr);
+    assert(stripSgr(out).rfind("\r\n", 0) == 0);  // closes the bar first
+    assert(vis(stripSgr(out)).find("$ abc") != std::string::npos);
+}
+
+void test_write_progress_measures_columns_without_sgr_and_one_line_only() {
+    ShellLineEditor ed(4);
+    std::string out;
+    ed.writeProgress("\x1b[32m==\x1b[0m]\nignored", out);  // 3 visible columns
+    out.clear();
+    ed.writeProgress("a", out);
+    assert(out == "\ra  ");  // pads exactly the 2 missing columns
+
+    out.clear();
+    ed.refreshLine(out);     // closes the bar before repainting
+    assert(out.rfind("\r\n", 0) == 0);
+}
+
 void test_multi_line_feed_drains_by_looping_poll() {
     ShellLineEditor ed(4);
     std::string out;
@@ -315,6 +371,9 @@ int main() {
     test_write_response_normalises_newlines();
     test_write_response_keeps_lone_cr_as_carriage_return();
     test_write_async_output_breaks_off_prompt_then_stacks();
+    test_write_progress_redraws_in_place_during_a_command();
+    test_write_progress_from_the_prompt_and_typing_restores_it();
+    test_write_progress_measures_columns_without_sgr_and_one_line_only();
     test_multi_line_feed_drains_by_looping_poll();
     test_unclosed_quote_continues_line();
     test_reverse_search();

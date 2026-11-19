@@ -28,6 +28,10 @@ void test_classify_keywords() {
            ShellMsgClass::Error);
     assert(shell_classify_line("Comando 'x' do modulo 'y' executado com sucesso.") ==
            ShellMsgClass::Success);
+    // TinyShell's own (English, since 2.2.0) status lines.
+    assert(shell_classify_line("foo: module not found") == ShellMsgClass::Error);
+    assert(shell_classify_line("robot -fail: failed with status 3") == ShellMsgClass::Error);
+    assert(shell_classify_line("robot -pwm: success") == ShellMsgClass::Success);
     assert(shell_classify_line("led ligado") == ShellMsgClass::Success);
     assert(shell_classify_line("WARNING: deprecated flag") == ShellMsgClass::Warning);
     assert(shell_classify_line("uptime 1234 ms") == ShellMsgClass::Output);
@@ -127,6 +131,47 @@ void test_colorize_block_bounds_input() {
 #endif
 }
 
+// -- shell_format_progress -------------------------------------------------
+
+std::string progress(unsigned pct, std::string_view label = {}, std::size_t width = 10) {
+    char buf[128];
+    const std::size_t n = shell_format_progress(buf, sizeof(buf), pct, label, width);
+    assert(n == std::char_traits<char>::length(buf));
+    return shell_strip_sgr(std::string(buf, n));
+}
+
+void test_progress_format() {
+    assert(progress(0) == "  0% [          ]");
+    assert(progress(5) == "  5% [          ]");             // less than one cell
+    assert(progress(42) == " 42% [===>      ]");
+    assert(progress(100) == "100% [==========]");            // complete: no '>' head
+    assert(progress(250) == "100% [==========]");            // clamped
+    assert(progress(50, "flash") == "flash  50% [====>     ]");
+    assert(progress(50, {}, 0) == " 50% [ ]");               // width clamped to 1
+    assert(progress(0, {}, SHELL_PROGRESS_WIDTH).size() == 7 + SHELL_PROGRESS_WIDTH);
+
+#ifdef TINYSHELL_COLOR
+    char buf[64];
+    shell_format_progress(buf, sizeof(buf), 50, {}, 4);
+    assert(std::string(buf) == " 50% [\x1b[32m=>\x1b[0m  ]");  // only the filled cells
+    shell_format_progress(buf, sizeof(buf), 0, {}, 4);
+    assert(std::string(buf) == "  0% [    ]");                  // nothing filled, no SGR
+#endif
+}
+
+void test_progress_bounds_its_buffer() {
+    char small[8];
+    const std::size_t n = shell_format_progress(small, sizeof(small), 42, "label", 20);
+    assert(n == sizeof(small) - 1);
+    assert(small[n] == '\0');
+    assert(std::string(small) == "label  ");
+
+    char one[1] = {'x'};
+    assert(shell_format_progress(one, sizeof(one), 42) == 0);
+    assert(one[0] == '\0');
+    assert(shell_format_progress(nullptr, 64, 42) == 0);  // no buffer: nothing written
+}
+
 // -- the colour gate -----------------------------------------------------
 
 void test_gate() {
@@ -137,7 +182,7 @@ void test_gate() {
     assert(std::string(shell_sgr(ShellMsgClass::Output)).empty());  // Output never colours
     assert(std::string(shell_sgr(ShellMsgClass::InputModule)) == "\x1b[33m");
     assert(std::string(shell_sgr(ShellMsgClass::InputFunction)) == "\x1b[34m");
-    assert(std::string(shell_sgr(ShellMsgClass::InputArgument)) == "\x1b[30m");
+    assert(std::string(shell_sgr(ShellMsgClass::InputArgument)) == "\x1b[39m");
     assert(std::string(shell_sgr_reset()) == "\x1b[0m");
     assert(shell_colorize_block("boom: erro fatal\n") == "\x1b[31mboom: erro fatal\x1b[0m\n");
 #else
@@ -166,6 +211,8 @@ int main() {
     test_colorize_block_leaves_precoloured_lines();
     test_colorize_block_fallback_only_hits_plain_lines();
     test_colorize_block_bounds_input();
+    test_progress_format();
+    test_progress_bounds_its_buffer();
     test_gate();
 
 #ifdef TINYSHELL_COLOR

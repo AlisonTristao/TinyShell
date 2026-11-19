@@ -34,7 +34,8 @@
  * blocking, no I/O of its own.
  *
  * When TINYSHELL_COLOR is enabled, live input is token-coloured with standard
- * ANSI SGR: module dark yellow, function dark blue, arguments black. The
+ * ANSI SGR: module dark yellow, function dark blue, arguments in the default
+ * foreground colour (readable on light and dark backgrounds). The
  * escape bytes never count toward cursor columns and each public output batch
  * restores the default rendition before returning.
  *
@@ -123,6 +124,23 @@ public:
     void writeAsyncOutput(const std::string& text, std::string& out);
 
     /**
+     * @brief Draw a status line that later calls overwrite in place -- a
+     * progress bar (see shell_format_progress()), a spinner, a countdown.
+     *
+     * The first call moves off the prompt/input line if one is on screen; each
+     * call then returns to column 0 with '\r', prints @p line and pads with
+     * spaces over whatever a longer previous line left behind. No newline is
+     * sent, so successive calls update one line. Only the text up to the first
+     * '\r' or '\n' of @p line is used; its SGR escapes do not count as columns.
+     *
+     * The line is closed (left visible, cursor moved to a fresh line) by the
+     * next writeResponse(), writeAsyncOutput(), refreshLine() or setPrompt()
+     * that repaints, or by poll() as soon as there is typed input to echo --
+     * nothing ever draws over it.
+     */
+    void writeProgress(const std::string& line, std::string& out);
+
+    /**
      * @brief Seed arrow-up history without echoing anything (e.g. replaying
      * persisted history at boot).
      */
@@ -165,6 +183,9 @@ private:
     // Shared body of writeResponse()/writeAsyncOutput(): CR+LF-normalised
     // append of `text` to sink_, with a closing "\r\n" when it lacks one.
     void emitResponseBody(const std::string& text);
+    // Leave a writeProgress() line on screen and move to a fresh line. No-op
+    // when none is shown. Caller must have set sink_.
+    void closeProgress();
 
     std::string pendingInput_;  // raw bytes fed but not yet processed by poll()
 
@@ -176,6 +197,9 @@ private:
     EscState escState_ = EscState::None;
     InputStyle activeInputStyle_ = InputStyle::Default;
     bool ignoreNextLf_ = false;
+    bool progressShown_ = false;        // a writeProgress() line is on screen
+    std::size_t progressColumns_ = 0;   // its visible width, for padding
+    bool progressHidPrompt_ = false;    // it broke off a painted prompt line
 
     std::vector<std::string> historyStorage_;  // sized to capacity_
     std::size_t capacity_;

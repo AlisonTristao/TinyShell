@@ -132,12 +132,46 @@ bool starts_with(std::string_view text, std::string_view prefix) {
     return text.substr(0, prefix.size()) == prefix;
 }
 
+// "module -command: " -- the bash-style prefix of every message about one
+// command ("bash: foo: command not found"). A template so it can take the
+// private TinyShell::Writer without naming it.
+template <typename Out>
+void put_command_prefix(Out& out, std::string_view module_name, std::string_view command_name) {
+    out.put(module_name);
+    if (!command_name.empty()) {
+        out.put(" -");
+        out.put(command_name);
+    }
+    out.put(": ");
+}
+
+template <typename Out>
+void put_spaces(Out& out, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) out.put(' ');
+}
+
+std::size_t c_length(const char* text) { return text != nullptr ? std::strlen(text) : 0; }
+
+// Columns of the help listings: two-space indent, then each column padded to
+// its widest entry plus this gap.
+constexpr std::size_t kHelpIndent = 2;
+constexpr std::size_t kHelpGap = 2;
+
+// Width write_types() prints: "(" + codes joined by ", " + ")".
+std::size_t types_width(const tinyshell::Command& command) {
+    std::size_t width = 2;
+    for (std::size_t i = 0; i < command.arity; ++i) {
+        width += c_length(command.types[i]) + (i != 0 ? 2 : 0);
+    }
+    return width;
+}
+
 }  // namespace
 
 void TinyShell::begin() {
     create_module("help", "Help module for listing available commands");
-    add([this]() { return wrapper_help(); }, "modules", "Description", "help");
-    add([this]() { return wrapper_help_types(); }, "types", "Description", "help");
+    add([this]() { return wrapper_help(); }, "modules", "List every module", "help");
+    add([this]() { return wrapper_help_types(); }, "types", "List the argument type codes", "help");
 }
 
 void TinyShell::emit(std::string_view chunk, ShellMsgClass msg_class) {
@@ -156,10 +190,16 @@ void TinyShell::write_module_list(Writer& out) {
         out.put("no modules available.\n");
         return;
     }
+    std::size_t name_width = 0;
+    for (std::size_t i = 0; i < table_linker.module_count(); ++i) {
+        const std::size_t width = c_length(table_linker.module_at(i).name);
+        if (width > name_width) name_width = width;
+    }
     for (std::size_t i = 0; i < table_linker.module_count(); ++i) {
         const tinyshell::Module& module = table_linker.module_at(i);
+        put_spaces(out, kHelpIndent);
         out.put(module.name);
-        out.put(" => ");
+        put_spaces(out, name_width - c_length(module.name) + kHelpGap);
         out.put(module.description);
         out.put('\n');
     }
@@ -177,17 +217,31 @@ void TinyShell::write_types(Writer& out, const tinyshell::Command& command) {
 void TinyShell::write_module_help(Writer& out, std::size_t module) {
     const tinyshell::Module& entry = table_linker.module_at(module);
     out.put(entry.name);
-    out.put(": ");
+    out.put(" - ");
     out.put(entry.description);
-    out.put("\n\n");
+    out.put("\nusage: ");
+    out.put(entry.name);
+    out.put(" -<command> [arg, ...]\n\n");
+
+    std::size_t name_width = 0;
+    std::size_t type_width = 0;
     for (std::size_t i = 0; i < table_linker.command_count(); ++i) {
         const tinyshell::Command& command = table_linker.command_at(i);
         if (command.module != module) continue;
+        const std::size_t name = c_length(command.name);
+        const std::size_t types = types_width(command);
+        if (name > name_width) name_width = name;
+        if (types > type_width) type_width = types;
+    }
+    for (std::size_t i = 0; i < table_linker.command_count(); ++i) {
+        const tinyshell::Command& command = table_linker.command_at(i);
+        if (command.module != module) continue;
+        put_spaces(out, kHelpIndent);
         out.put('-');
         out.put(command.name);
-        out.put(' ');
+        put_spaces(out, name_width - c_length(command.name) + kHelpGap);
         write_types(out, command);
-        out.put(" => ");
+        put_spaces(out, type_width - types_width(command) + kHelpGap);
         out.put(command.description);
         out.put('\n');
     }
@@ -233,11 +287,11 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
     if (command.size() > TINYSHELL_MAX_LINE) {
         status = RESULT_ERROR;
         return respond([&](Writer& out) {
-            out.put("Command line too long (");
+            out.put("error: command line too long (");
             out.put_number(static_cast<unsigned long>(command.size()));
             out.put(" characters, max ");
             out.put_number(static_cast<unsigned long>(TINYSHELL_MAX_LINE));
-            out.put(").\n");
+            out.put(")\n");
         });
     }
 
@@ -274,9 +328,8 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
     if (module == TableLinker::kNotFound) {
         status = MODULE_NOT_FOUND;
         return respond([&](Writer& out) {
-            out.put("Module '");
             out.put(module_name);
-            out.put("' not found.\n\n");
+            out.put(": module not found\n\n");
             write_module_list(out);
         });
     }
@@ -285,11 +338,9 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
     if (index == TableLinker::kNotFound) {
         status = FUNCTION_NOT_FOUND;
         return respond([&](Writer& out) {
-            out.put("Command '");
-            out.put(command_name);
-            out.put("' not found in module '");
-            out.put(module_name);
-            out.put("'\n\n");
+            put_command_prefix(out, module_name, command_name);
+            // A bare module name asks for its help; anything else was a typo.
+            out.put(command_name.empty() ? "missing command\n\n" : "command not found\n\n");
             write_module_help(out, module);
         });
     }
@@ -298,7 +349,8 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
     if (args_count != entry.arity) {
         status = RESULT_ERROR;
         return respond([&](Writer& out) {
-            out.put("Falha ao converter os tipos, a funcao espera => ");
+            put_command_prefix(out, module_name, command_name);
+            out.put("invalid number of arguments, expected ");
             write_types(out, entry);
             out.put('\n');
         });
@@ -335,12 +387,10 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
     }
     if (thrown != nullptr) {
         return respond([&](Writer& out) {
+            put_command_prefix(out, module_name, command_name);
+            out.put("error: ");
             out.put(thrown);
-            out.put(" (command '");
-            out.put(command_name);
-            out.put("' of module '");
-            out.put(module_name);
-            out.put("')\n");
+            out.put('\n');
         });
     }
 #else
@@ -351,28 +401,30 @@ std::uint8_t TinyShell::run_command_line(std::string_view command) {
         status = RESULT_ERROR;
         const char* code = entry.types[conversion.index];
         return respond([&](Writer& out) {
-            out.put("Error converting argument '");
+            put_command_prefix(out, module_name, command_name);
+            out.put("invalid argument '");
             out.put(argv[conversion.index]);
-            out.put("' to type '");
-            out.put(code);
-            out.put("': Conversion failed for type '");
+            out.put("' for type '");
             out.put(code);
             out.put("': ");
             out.put(conversion.detail);
+            out.put('\n');
         });
     }
 
+#if defined(TINYSHELL_QUIET_SUCCESS)
+    // Unix convention: a command that worked says nothing more than its own
+    // output. Failures are still reported below.
+    if (status == RESULT_OK) return status;
+#endif
     return respond([&](Writer& out) {
-        out.put("Comando '");
-        out.put(command_name);
-        out.put("' do modulo '");
-        out.put(module_name);
+        put_command_prefix(out, module_name, command_name);
         if (status != RESULT_OK) {
-            out.put("' falhou com codigo de erro: ");
+            out.put("failed with status ");
             out.put_number(status);
-            out.put(".\n");
+            out.put('\n');
         } else {
-            out.put("' executado com sucesso.\n");
+            out.put("success\n");
         }
     });
 }

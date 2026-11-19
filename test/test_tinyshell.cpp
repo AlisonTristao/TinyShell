@@ -73,6 +73,18 @@ bool contains(const std::string& haystack, std::string_view needle) {
     return !kMessages || haystack.find(needle) != std::string::npos;
 }
 
+// The "<module> -<command>: success" line, which TINYSHELL_QUIET_SUCCESS leaves
+// out by design.
+bool reported_success(const std::string& haystack, std::string_view needle) {
+#if defined(TINYSHELL_QUIET_SUCCESS)
+    (void)haystack;
+    (void)needle;
+    return true;
+#else
+    return contains(haystack, needle);
+#endif
+}
+
 void test_basic_call_and_types() {
     TinyShell shell;
     Capture out;
@@ -102,7 +114,7 @@ void test_basic_call_and_types() {
     assert(got_f == 2.5f);
     assert(got_b);
     assert(got_s == "hello, world");
-    assert(contains(out.text, "Comando 'mix' do modulo 'math' executado com sucesso."));
+    assert(reported_success(out.text, "math -mix: success\n"));
 
     // `long` / `int` / `int32_t` are all "i4" by size, not by exact type.
     assert(shell.add([](long v) -> uint8_t { return v == 7 ? 0 : 1; }, "l", "long", "math") ==
@@ -110,7 +122,7 @@ void test_basic_call_and_types() {
     assert(shell.run_command_line("math -l 7") == RESULT_OK);
 }
 
-void test_errors_keep_the_1x_messages() {
+void test_error_messages() {
     TinyShell shell;
     Capture out;
     shell.set_output_callback([&out](std::string_view s) { out(s); });
@@ -121,23 +133,35 @@ void test_errors_keep_the_1x_messages() {
 
     out.text.clear();
     assert(shell.run_command_line("nope -x") == MODULE_NOT_FOUND);
-    assert(contains(out.text, "Module 'nope' not found."));
-    assert(contains(out.text, "robot => the robot\n"));
+    assert(contains(out.text, "nope: module not found\n\n"));
+    // Module list: names padded to the widest one ("robot").
+    assert(contains(out.text,
+                    "  help   Help module for listing available commands\n"
+                    "  robot  the robot\n"));
 
     out.text.clear();
     assert(shell.run_command_line("robot") == FUNCTION_NOT_FOUND);  // bare module
-    assert(contains(out.text, "Command '' not found in module 'robot'"));
-    assert(contains(out.text, "robot: the robot\n\n-pwm (u1, u1) => set pwm\n-fail () => always fails\n"));
+    assert(contains(out.text, "robot: missing command\n\n"));
+    // Command list: name and type columns aligned.
+    assert(contains(out.text,
+                    "robot - the robot\n"
+                    "usage: robot -<command> [arg, ...]\n"
+                    "\n"
+                    "  -pwm   (u1, u1)  set pwm\n"
+                    "  -fail  ()        always fails\n"));
+
+    out.text.clear();
+    assert(shell.run_command_line("robot -nope") == FUNCTION_NOT_FOUND);
+    assert(contains(out.text, "robot -nope: command not found\n"));
 
     out.text.clear();
     assert(shell.run_command_line("robot -pwm 1") == RESULT_ERROR);
-    assert(contains(out.text, "Falha ao converter os tipos, a funcao espera => (u1, u1)"));
+    assert(contains(out.text, "robot -pwm: invalid number of arguments, expected (u1, u1)\n"));
 
     out.text.clear();
     assert(shell.run_command_line("robot -pwm 1, 300") == RESULT_ERROR);
     assert(contains(out.text,
-                    "Error converting argument '300' to type 'u1': Conversion failed for type "
-                    "'u1': unsigned integer out of range"));
+                    "robot -pwm: invalid argument '300' for type 'u1': unsigned integer out of range\n"));
 
     out.text.clear();
     assert(shell.run_command_line("robot -pwm -1, 2") == RESULT_ERROR);
@@ -145,7 +169,7 @@ void test_errors_keep_the_1x_messages() {
 
     out.text.clear();
     assert(shell.run_command_line("robot -fail") == 3);
-    assert(contains(out.text, "Comando 'fail' do modulo 'robot' falhou com codigo de erro: 3."));
+    assert(contains(out.text, "robot -fail: failed with status 3\n"));
 
     // Duplicate module keeps the 1.x code; duplicate command is refused.
     assert(shell.create_module("robot", "again") == MODULE_NOT_FOUND);
@@ -163,8 +187,8 @@ void test_help_and_completion() {
     shell.add([]() -> uint8_t { return 0; }, "lcd", "lcd", "dongle");
 
     assert(shell.run_command_line("help -modules") == RESULT_OK);
-    assert(contains(out.text, "help => Help module for listing available commands\n"));
-    assert(contains(out.text, "dongle => the dongle\n"));
+    assert(contains(out.text, "  help    Help module for listing available commands\n"));
+    assert(contains(out.text, "  dongle  the dongle\n"));
     out.text.clear();
     assert(shell.run_command_line("help -types") == RESULT_OK);
     assert(contains(out.text, "u1 u2 u4 u8"));
@@ -285,11 +309,11 @@ void test_line_too_long_and_nesting() {
     }, "run", "run", "n");
     shell.add([]() -> uint8_t { return 0; }, "ok", "ok", "n");
     assert(shell.run_command_line("n -run n -ok") == RESULT_OK);
-    assert(contains(out.text, "Comando 'ok' do modulo 'n' executado com sucesso."));
+    assert(reported_success(out.text, "n -ok: success\n"));
 
     const std::string huge(TINYSHELL_MAX_LINE + 1, 'x');
     assert(shell.run_command_line(huge) == RESULT_ERROR);
-    assert(contains(out.text, "Command line too long"));
+    assert(contains(out.text, "error: command line too long"));
 }
 
 // The 1.x callback shape (const std::string&) keeps working.
@@ -300,7 +324,7 @@ void test_legacy_string_callback() {
     shell.create_module("x", "x");
     shell.add([]() -> uint8_t { return 0; }, "y", "y", "x");
     shell.run_command_line(std::string("x -y"));
-    assert(contains(shell_strip_sgr(seen), "executado com sucesso"));
+    assert(reported_success(shell_strip_sgr(seen), "x -y: success"));
 }
 
 // A response bigger than the output buffer arrives in several whole-line
@@ -338,15 +362,34 @@ void test_verbosity_modes() {
 #elif defined(VERBOSE_OFF)
     assert(out.text == std::string("7") + '\n');
 #else
-    assert(out.text.find("falhou com codigo de erro: 7.") != std::string::npos);
+    assert(out.text.find("v -seven: failed with status 7\n") != std::string::npos);
 #endif
+}
+
+// TINYSHELL_QUIET_SUCCESS: a command that worked adds nothing to its own
+// output; a failure is still reported.
+void test_quiet_success() {
+    TinyShell shell;
+    Capture out;
+    shell.set_output_callback([&out](std::string_view s) { out(s); });
+    shell.create_module("q", "q");
+    shell.add([]() -> uint8_t { return 0; }, "ok", "ok", "q");
+    shell.add([]() -> uint8_t { return 2; }, "bad", "bad", "q");
+    assert(shell.run_command_line("q -ok") == RESULT_OK);
+#if defined(TINYSHELL_QUIET_SUCCESS)
+    assert(out.text.empty());
+#else
+    assert(contains(out.text, "q -ok: success\n"));
+#endif
+    assert(shell.run_command_line("q -bad") == 2);
+    assert(contains(out.text, "q -bad: failed with status 2\n"));
 }
 
 }  // namespace
 
 int main() {
     test_basic_call_and_types();
-    test_errors_keep_the_1x_messages();
+    test_error_messages();
     test_help_and_completion();
     test_string_view_args_are_zero_copy();
     test_running_a_command_allocates_nothing();
@@ -357,6 +400,7 @@ int main() {
     test_legacy_string_callback();
     test_long_output_is_chunked_on_line_boundaries();
     test_verbosity_modes();
+    test_quiet_success();
     std::printf("test_tinyshell: all checks passed%s\n",
                 shell_color_enabled() ? " (TINYSHELL_COLOR)" : "");
     return 0;

@@ -51,6 +51,9 @@ void ShellLineEditor::reset() {
     escState_ = EscState::None;
     activeInputStyle_ = InputStyle::Default;
     ignoreNextLf_ = false;
+    progressShown_ = false;
+    progressColumns_ = 0;
+    progressHidPrompt_ = false;
     historyCursor_ = -1;
     resetTabCycle();
     resetReverseSearch();
@@ -176,6 +179,16 @@ bool ShellLineEditor::poll(std::string& out, std::string* outLine) {
     sink_ = &out;
     activeInputStyle_ = InputStyle::Default;
 
+    // Typed input is about to be echoed: never onto a progress line. If that
+    // line had broken off the prompt, bring the prompt back first.
+    if (progressShown_ && !pendingInput_.empty()) {
+        const bool restorePrompt = progressHidPrompt_;
+        closeProgress();
+        if (restorePrompt) {
+            redrawInput();
+        }
+    }
+
     std::string line;
     bool lineReady = false;
     std::size_t consumed = 0;
@@ -205,6 +218,7 @@ void ShellLineEditor::setPrompt(const std::string& text, std::string& out) {
     prompt_ = text;
     sink_ = &out;
     activeInputStyle_ = InputStyle::Default;
+    closeProgress();
     redrawInput();
     resetInputStyle();
     sink_ = nullptr;
@@ -213,6 +227,7 @@ void ShellLineEditor::setPrompt(const std::string& text, std::string& out) {
 void ShellLineEditor::refreshLine(std::string& out) {
     sink_ = &out;
     activeInputStyle_ = InputStyle::Default;
+    closeProgress();
     redrawInput();
     resetInputStyle();
     sink_ = nullptr;
@@ -251,6 +266,7 @@ void ShellLineEditor::writeResponse(const std::string& text, std::string& out) {
     sink_ = &out;
     activeInputStyle_ = InputStyle::Default;
 
+    closeProgress();
     emitResponseBody(text);
 
     // The response left the cursor at column 0 of a fresh line; there is
@@ -269,6 +285,7 @@ void ShellLineEditor::writeAsyncOutput(const std::string& text, std::string& out
     sink_ = &out;
     activeInputStyle_ = InputStyle::Default;
 
+    closeProgress();
     // Move off the prompt/input line so the text starts on its own line -- but
     // only on the first call of a burst. A run of these then sees
     // renderedLength_ == 0 (left that way below) and stacks with no gap.
@@ -283,6 +300,67 @@ void ShellLineEditor::writeAsyncOutput(const std::string& text, std::string& out
     // repainted here (see the header doc) so consecutive bursts do not put a
     // prompt between every line. Call refreshLine() once the burst pauses.
     resetInputStyle();
+    sink_ = nullptr;
+}
+
+void ShellLineEditor::closeProgress() {
+    if (!progressShown_) {
+        return;
+    }
+    emit("\r\n");
+    progressShown_ = false;
+    progressColumns_ = 0;
+    progressHidPrompt_ = false;
+    renderedLength_ = 0;
+}
+
+void ShellLineEditor::writeProgress(const std::string& line, std::string& out) {
+    sink_ = &out;
+    activeInputStyle_ = InputStyle::Default;
+
+    if (!progressShown_) {
+        // First update: get off the prompt/input line if one is painted, the
+        // same way writeAsyncOutput() does.
+        progressHidPrompt_ = renderedLength_ > 0;
+        if (progressHidPrompt_) {
+            emit("\r\n");
+            renderedLength_ = 0;
+        }
+    }
+
+    // One line only, measured without its escape sequences.
+    std::size_t end = line.find_first_of("\r\n");
+    if (end == std::string::npos) {
+        end = line.size();
+    }
+    std::size_t columns = 0;
+    for (std::size_t i = 0; i < end; ++i) {
+        if (line[i] == '\x1b') {
+            std::size_t j = i + 1;
+            if (j < end && line[j] == '[') {
+                ++j;
+                while (j < end && (static_cast<unsigned char>(line[j]) < 0x40 ||
+                                   static_cast<unsigned char>(line[j]) > 0x7E)) {
+                    ++j;
+                }
+            }
+            i = j;  // the final byte (or end); the loop's ++i steps past it
+            continue;
+        }
+        ++columns;
+    }
+
+    emit('\r');
+    sink_->append(line, 0, end);
+    if (shell_color_enabled() && line.find('\x1b') < end) {
+        emit(shell_sgr_reset());  // whatever the line coloured ends here
+    }
+    for (std::size_t i = columns; i < progressColumns_; ++i) {
+        emit(' ');  // blank out the tail of a longer previous line
+    }
+
+    progressShown_ = true;
+    progressColumns_ = columns;
     sink_ = nullptr;
 }
 

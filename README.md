@@ -2,7 +2,44 @@
 
 ## Version
 
-Current version: **2.1.0**
+Current version: **2.2.0**
+
+### What's New in 2.2.0
+
+A terminal that reads more like a Linux shell, and progress bars. No API was
+removed or changed; what changed is the **text** of the framework's messages.
+
+- **Messages in English, bash style** (`bash: foo: command not found`):
+
+  | 2.1.0 | 2.2.0 |
+  | --- | --- |
+  | `Comando 'pwm' do modulo 'robot' executado com sucesso.` | `robot -pwm: success` |
+  | `Comando 'pwm' do modulo 'robot' falhou com codigo de erro: 3.` | `robot -pwm: failed with status 3` |
+  | `Module 'nope' not found.` | `nope: module not found` |
+  | `Command 'x' not found in module 'robot'` | `robot -x: command not found` (`robot: missing command` for a bare module) |
+  | `Falha ao converter os tipos, a funcao espera => (u1, u1)` | `robot -pwm: invalid number of arguments, expected (u1, u1)` |
+  | `Error converting argument '300' to type 'u1': Conversion failed for type 'u1': …` | `robot -pwm: invalid argument '300' for type 'u1': …` |
+  | `Command line too long (…).` | `error: command line too long (…)` |
+
+  Code that compared these strings must be updated; the status codes are the
+  same. `shell_classify_line()` still recognises both languages.
+- **Help in aligned columns**, with a usage line:
+
+  ```
+  robot - the robot
+  usage: robot -<command> [arg, ...]
+
+    -pwm   (u1, u1)  set pwm
+    -fail  ()        always fails
+  ```
+- **`TINYSHELL_QUIET_SUCCESS`** (`-D` flag, or menuconfig): no
+  `success` line — a command that worked prints only its own output.
+  Failures are still reported. Off by default.
+- **Arguments are no longer black.** Live input used ANSI 30 for arguments,
+  invisible on a dark terminal; it is now the default foreground (ANSI 39).
+- **Progress bars**: `shell_format_progress()` (ShellStyle) formats the line,
+  `ShellLineEditor::writeProgress()` redraws it in place. See
+  [Progress bars](#progress-bars).
 
 ### What's New in 2.1.0
 
@@ -84,7 +121,7 @@ response instead of a crash.
 
 `ShellLineEditor` now colours the live command echo when `TINYSHELL_COLOR` is
 enabled: the module (first token) is dark yellow, the function (second token,
-including its leading `-`) is dark blue, and arguments are black. Full redraws
+including its leading `-`) is dark blue, and arguments use the default foreground. Full redraws
 from history, Tab completion, cursor movement, mid-line edits and horizontal
 scrolling retain the token colours. Every emitted batch ends with an SGR reset
 so input colour cannot leak into command output. Builds without the flag remain
@@ -239,8 +276,62 @@ A few notes:
   `\n` to `\r\n`.
 * With `TINYSHELL_COLOR`, the first command token (module) uses ANSI 33 (dark
   yellow), the second (function) uses ANSI 34 (dark blue), and all remaining
-  tokens (arguments) use ANSI 30 (black). Each output batch ends in ANSI reset.
+  tokens (arguments) use ANSI 39 (default foreground, readable on any background). Each output batch ends in ANSI reset.
 * One instance is **not thread-safe** — drive it from a single thread/task.
+* `writeProgress(line, out)` draws a line that the next call overwrites in
+  place (`\r` + text + space padding, no newline) — a progress bar, a spinner.
+  It is closed, and left visible, by the next `writeResponse()`,
+  `writeAsyncOutput()`, `refreshLine()`, or by typed input. See
+  [Progress bars](#progress-bars).
+
+### Progress bars
+
+```
+robot -calibrate 200
+calibrate  47% [=============>                ]
+```
+
+The bar is a line that is rewritten in place: `\r` goes back to column 0
+without a newline, and the new text is printed over the old one. TinyShell
+gives you the two pieces and leaves the wiring to you:
+
+* `shell_format_progress(buf, cap, percent, label, width)` formats the line
+  into your buffer (no I/O, no allocation; the filled part is green with
+  `TINYSHELL_COLOR`).
+* `ShellLineEditor::writeProgress(line, out)` puts it on screen without
+  fighting the prompt.
+
+**Keep the work function shell-agnostic.** It should not include TinyShell or
+know where the percentage goes; give it a plain C callback instead, and connect
+the callback where the command is registered:
+
+```cpp
+// sensor.h -- no TinyShell here
+using ProgressFn = void (*)(void* ctx, uint8_t percent);
+uint8_t calibrate(int samples, ProgressFn on_progress = nullptr, void* ctx = nullptr) {
+    for (int i = 1; i <= samples; ++i) {
+        read_sample();
+        if (on_progress) on_progress(ctx, i * 100 / samples);
+    }
+    return RESULT_OK;
+}
+
+// registration -- the only place that knows both sides
+void serial_progress(void* label, uint8_t pct) {
+    char line[64];
+    shell_format_progress(line, sizeof line, pct, static_cast<const char*>(label));
+    Serial.print('\r');
+    Serial.print(line);
+    if (pct >= 100) Serial.println();
+}
+shell.add([](int n) { return calibrate(n, serial_progress, (void*)"calibrate"); },
+          "calibrate", "Calibrate the sensor", "robot");
+```
+
+The shell still sees `calibrate (i4)`. The callback may be called as often as
+the work likes; rate-limit in the sink if the link is slow. A terminal must
+honour `\r` — the Arduino IDE Serial Monitor does not (every update lands on a
+new line); PuTTY, picocom/minicom, `idf.py monitor` and TraceView do.
 
 ### Constants (compile-time, in `ShellLineEditor.h`)
 
@@ -273,7 +364,7 @@ sequence. Framework-free (standard string headers only), no dependency on
 | `Muted` | `\e[90m` grey | ESP-NOW `[info]`/`[debug]`/`[telemetry]`/`[cmd]` lines |
 | `InputModule` | `\e[33m` dark yellow | first live command token |
 | `InputFunction` | `\e[34m` dark blue | second live command token |
-| `InputArgument` | `\e[30m` black | remaining live command tokens |
+| `InputArgument` | `\e[39m` default foreground | remaining live command tokens |
 
 The built-in `shell_classify_line` is bilingual (pt/en). Structured prefixes
 (`erro(`, `aviso(`, `[help]`) and ESP-NOW tags (`[error][…]`) are confident; the
@@ -297,6 +388,9 @@ std::string   shell_strip_sgr(std::string_view text);               // drop ever
 std::string   shell_colorize_block(std::string_view text,           // split lines, classify, wrap, rejoin
                                    ShellMsgClass fallback = ShellMsgClass::Output,
                                    ShellLineClassifier classifier = &shell_classify_line);
+std::size_t   shell_format_progress(char* out, std::size_t capacity, // " 42% [===>      ]" into your buffer
+                                    unsigned percent, std::string_view label = {},
+                                    std::size_t width = SHELL_PROGRESS_WIDTH) noexcept;
 ```
 
 `shell_colorize_block` keeps the exact line terminators, skips any line that

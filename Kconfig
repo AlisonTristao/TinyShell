@@ -8,6 +8,14 @@ menu "TinyShell"
             and help output (ShellStyle.h). TraceView maps these pens to its
             theme. Turn off for a plain serial monitor.
 
+    config TINYSHELL_QUIET_SUCCESS
+        bool "Quiet success (no \"<module> -<command>: success\" line)"
+        default n
+        help
+            Unix convention: a command that worked prints only its own
+            output. Failures ("<module> -<command>: failed with status N")
+            are still reported.
+
     config TINYSHELL_MAX_MODULES
         int "Maximum number of modules"
         default 32
